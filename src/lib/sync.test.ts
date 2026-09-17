@@ -129,7 +129,7 @@ describe('live room payload', () => {
       expenses: [],
     })
     const encoded = encodeTripShare(sample)
-    const shareId = 'ff808181payload1'
+    const shareId = 'ff808181abcd1234abcd5678'
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {

@@ -2,7 +2,6 @@ import type { Trip } from '../types'
 import {
   canonicalAppUrl,
   decodeTripShare,
-  encodeTripShare,
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
@@ -88,11 +87,6 @@ function roomPayload(json: RoomBody): { payload?: string; bin?: string; trip?: T
   }
 }
 
-function roomData(trip: Trip, bin?: string | null) {
-  const payload = encodeTripShare({ ...trip, isDemo: false })
-  return bin ? { payload, bin } : { payload }
-}
-
 export async function createLiveRoom(trip: Trip): Promise<string> {
   const shareId =
     typeof crypto !== 'undefined' && crypto.randomUUID
@@ -103,6 +97,7 @@ export async function createLiveRoom(trip: Trip): Promise<string> {
 }
 
 export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
+  if (!/^[a-f0-9]{16,}$/i.test(shareId)) return null
   try {
     const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, { method: 'GET' })
     if (!res.ok) return null
@@ -122,15 +117,6 @@ export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
   const bin = await postSnapshot(withId)
   await publishLivePing(shareId, withId, bin)
-  try {
-    const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ name: 'triptab', data: roomData(withId, bin) }),
-    })
-    if (res.ok) return
-  } catch {
-    /* live channel already has the update */
-  }
 }
 
 export async function ensureLiveRoom(trip: Trip): Promise<string> {
