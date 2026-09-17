@@ -1,10 +1,12 @@
 import { ArrowLeft, Plus, Receipt, Scale, Settings2, Share } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
+import { EMPTY_FILTER, filterExpenses, isFilterActive, type ExpenseFilter } from '../lib/filter'
 import { convertedLabel, formatMoney, isSettlement, splitLabel, tripTotalBase } from '../lib/money'
 import { cn } from '../lib/utils'
 import { useStore } from '../state'
 import type { Expense, Trip } from '../types'
 import { BalancesView } from './BalancesView'
+import { ExpenseFilterBar } from './ExpenseFilters'
 import { ExpenseForm } from './ExpenseForm'
 import { TripHero } from './TripHero'
 import { TripSettings } from './TripSettings'
@@ -17,13 +19,19 @@ export function TripPage({ trip }: { trip: Trip }) {
   const [tab, setTab] = useState<Tab>('expenses')
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
+  const [filter, setFilter] = useState<ExpenseFilter>(EMPTY_FILTER)
 
   const peopleById = useMemo(() => new Map(trip.people.map((p) => [p.id, p])), [trip.people])
   const cats = useMemo(() => new Map(trip.categories.map((c) => [c.id, c])), [trip.categories])
+  const visibleExpenses = useMemo(() => filterExpenses(trip.expenses, filter), [trip.expenses, filter])
+  const filtering = isFilterActive(filter)
+  const showFiltered = tab === 'expenses' && filtering
+  const spent = tripTotalBase(trip, showFiltered ? visibleExpenses : trip.expenses)
+  const loggedCount = showFiltered ? visibleExpenses.length : trip.expenses.length
 
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>()
-    const sorted = [...trip.expenses].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt)
+    const sorted = [...visibleExpenses].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt)
     for (const e of sorted) {
       const key = e.date || 'Undated'
       const list = map.get(key) ?? []
@@ -31,7 +39,7 @@ export function TripPage({ trip }: { trip: Trip }) {
       map.set(key, list)
     }
     return [...map.entries()]
-  }, [trip.expenses])
+  }, [visibleExpenses])
 
   const openNew = () => {
     setEditing(null)
@@ -101,24 +109,28 @@ export function TripPage({ trip }: { trip: Trip }) {
         />
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="rounded-[12px] bg-[var(--grouped)] px-4 py-3">
-            <p className="text-[13px] text-[var(--muted)]">Spent</p>
+            <p className="text-[13px] text-[var(--muted)]">{showFiltered ? 'Filtered' : 'Spent'}</p>
             <p className="mt-0.5 text-[22px] font-semibold tracking-tight tabular-nums">
-              {formatMoney(tripTotalBase(trip), trip.baseCurrency)}
+              {formatMoney(spent, trip.baseCurrency)}
             </p>
           </div>
           <div className="rounded-[12px] bg-[var(--grouped)] px-4 py-3">
-            <p className="text-[13px] text-[var(--muted)]">Logged</p>
+            <p className="text-[13px] text-[var(--muted)]">{showFiltered ? 'Showing' : 'Logged'}</p>
             <p className="mt-0.5 text-[22px] font-semibold tracking-tight">
-              {trip.expenses.length} {trip.expenses.length === 1 ? 'bill' : 'bills'}
+              {loggedCount} {loggedCount === 1 ? 'bill' : 'bills'}
+              {showFiltered ? ` of ${trip.expenses.length}` : ''}
             </p>
           </div>
         </div>
+        {tab === 'expenses' && trip.expenses.length > 0 && (
+          <ExpenseFilterBar trip={trip} filter={filter} onChange={setFilter} />
+        )}
       </header>
 
       <div className="mt-2">
         {tab === 'expenses' && (
           <div>
-            {grouped.length === 0 ? (
+            {trip.expenses.length === 0 ? (
               <div className="mt-8 flex flex-col items-center px-6 text-center">
                 <span className="grid h-16 w-16 place-items-center rounded-[18px] bg-[var(--grouped)] text-[var(--muted)]">
                   <Receipt size={28} strokeWidth={1.5} />
@@ -127,6 +139,17 @@ export function TripPage({ trip }: { trip: Trip }) {
                 <p className="mt-1 text-[15px] text-[var(--muted)]">Add a taxi, meal, or stay to get started.</p>
                 <Button className="mt-5" onClick={openNew}>
                   <Plus size={16} strokeWidth={2.25} /> Add Expense
+                </Button>
+              </div>
+            ) : grouped.length === 0 ? (
+              <div className="mt-8 flex flex-col items-center px-6 text-center">
+                <span className="grid h-16 w-16 place-items-center rounded-[18px] bg-[var(--grouped)] text-[var(--muted)]">
+                  <Receipt size={28} strokeWidth={1.5} />
+                </span>
+                <p className="title-3 mt-4">Nothing matches</p>
+                <p className="mt-1 text-[15px] text-[var(--muted)]">Try another friend or category, or clear the filter.</p>
+                <Button className="mt-5" variant="secondary" onClick={() => setFilter(EMPTY_FILTER)}>
+                  Clear Filter
                 </Button>
               </div>
             ) : (

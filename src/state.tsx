@@ -1,16 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AppData, Theme, Trip } from './types'
 import { createDemoTrip, emptyTrip } from './lib/demo'
-import { parseImportFromLocation } from './lib/share'
+import { parseShareLocation, shareLinkForTrip } from './lib/share'
 import { nextPersonColor } from './lib/colors'
 import { defaultAppData, loadAppData, normalizeAppData, normalizeTrip, saveAppData } from './lib/storage'
 import {
+  adoptSharedTrip,
   clearLiveShareLocation,
-  createLiveRoom,
+  ensureLiveRoom,
   isLocalHost,
-  liveShareUrl,
   mergeTrips,
-  parseLiveShareId,
   pullLiveTrip,
   pushLiveTrip,
   setLiveShareHash,
@@ -78,57 +77,53 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    const liveId = parseLiveShareId()
-    if (liveId) {
-      joining.current = true
-      void (async () => {
-        try {
-          const remote = await pullLiveTrip(liveId)
-          if (!remote) {
-            notify('Could not open the shared trip. Check the link and try again.')
-            return
-          }
-          setLiveShareHash(liveId)
-          setData((prev) => {
-            const existing = prev.trips.find((t) => t.shareId === liveId || t.id === remote.id)
-            if (existing) {
-              const merged = mergeTrips(existing, { ...remote, shareId: liveId })
-              return {
-                ...prev,
-                currentTripId: existing.id,
-                trips: prev.trips.map((t) => (t.id === existing.id ? { ...merged, id: existing.id, shareId: liveId } : t)),
-              }
-            }
-            const trip = { ...remote, shareId: liveId, isDemo: false }
-            return {
-              ...prev,
-              trips: [trip, ...prev.trips],
-              currentTripId: trip.id,
-            }
-          })
-          notify('Live trip — everyone on this link can add expenses')
-        } finally {
-          joining.current = false
-        }
-      })()
+    const { shareId: liveId, trip: snapshot } = parseShareLocation(window.location.href)
+    if (!liveId && !snapshot) return
+
+    const localMatch = dataRef.current.trips.find(
+      (t) => (liveId && t.shareId === liveId) || (snapshot && t.id === snapshot.id),
+    )
+    if (localMatch || snapshot) {
+      const incoming = snapshot ?? localMatch
+      if (incoming) {
+        setData((prev) => {
+          const next = adoptSharedTrip(prev.trips, incoming, liveId ?? incoming.shareId)
+          return { ...prev, ...next }
+        })
+        if (liveId) setLiveShareHash(liveId)
+      }
+    }
+
+    if (!liveId) {
+      if (snapshot) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+        notify(`Opened “${snapshot.name}”`)
+      }
       return
     }
 
-    const shared = parseImportFromLocation()
-    if (!shared) return
-    const imported = { ...shared, isDemo: false, id: uid(), updatedAt: Date.now() }
-    setData((prev) => {
-      if (prev.trips.some((t) => t.id === shared.id)) {
-        return { ...prev, currentTripId: shared.id }
+    joining.current = true
+    void (async () => {
+      try {
+        const remote = await pullLiveTrip(liveId)
+        if (remote) {
+          setLiveShareHash(liveId)
+          setData((prev) => {
+            const next = adoptSharedTrip(prev.trips, remote, liveId)
+            return { ...prev, ...next }
+          })
+          if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
+          return
+        }
+        if (localMatch || snapshot) {
+          setLiveShareHash(liveId)
+          return
+        }
+        notify('Could not open the shared trip. Check the link and try again.')
+      } finally {
+        joining.current = false
       }
-      return {
-        ...prev,
-        trips: [imported, ...prev.trips],
-        currentTripId: imported.id,
-      }
-    })
-    window.history.replaceState(null, '', window.location.pathname)
-    setToast({ id: uid(), message: `Imported “${shared.name}”` })
+    })()
   }, [])
 
   const currentTrip = data.trips.find((t) => t.id === data.currentTripId) ?? null
@@ -270,41 +265,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resetAll: () => setData(defaultAppData()),
       notify,
       shareWithFriends: async (trip) => {
+        let shareId = trip.shareId
+        let live = false
         try {
-          let shareId = trip.shareId
-          if (!shareId) {
-            shareId = await createLiveRoom(trip)
-            const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
-            setData((d) => ({
-              ...d,
-              trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
-            }))
-          }
+          shareId = await ensureLiveRoom(trip)
+          live = true
+          const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
+          setData((d) => ({
+            ...d,
+            trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
+          }))
           setLiveShareHash(shareId)
-          const url = liveShareUrl(shareId)
-          try {
-            if (navigator.share) {
-              await navigator.share({
-                title: trip.name,
-                text: 'Open this TripTab link to add expenses with the group.',
-                url,
-              })
-            } else {
-              await navigator.clipboard.writeText(url)
-            }
-          } catch {
+        } catch {
+          /* snapshot in the link still opens the trip */
+        }
+        const url = shareLinkForTrip({ ...trip, shareId }, shareId)
+        try {
+          if (navigator.share) {
+            await navigator.share({
+              title: trip.name,
+              text: 'Open this TripTab link to add expenses with the group.',
+              url,
+            })
+          } else {
             await navigator.clipboard.writeText(url)
           }
-          notify(
-            isLocalHost()
-              ? 'Invite ready. Deploy TripTab (GitHub Pages) so friends outside this computer can open it.'
-              : 'Invite link copied — friends can add expenses on their phones.',
-          )
-          return url
         } catch {
-          notify('Could not start a live trip. Check your connection and try again.')
-          throw new Error('live share failed')
+          await navigator.clipboard.writeText(url)
         }
+        notify(
+          isLocalHost()
+            ? 'Invite ready. Deploy TripTab (GitHub Pages) so friends outside this computer can open it.'
+            : live
+              ? 'Invite link copied — friends can open it and add expenses.'
+              : 'Invite link copied — friends can open the trip on their phones.',
+        )
+        return url
       },
     }
   }, [data, toast, currentTrip])

@@ -7,7 +7,7 @@ export default function App() {
   const { currentTrip, toast } = useStore()
   return (
     <>
-      {currentTrip ? <TripPage trip={currentTrip} /> : <HomePage />}
+      {currentTrip ? <TripPage key={currentTrip.id} trip={currentTrip} /> : <HomePage />}
       {toast && <Toast message={toast.message} />}
     </>
   )

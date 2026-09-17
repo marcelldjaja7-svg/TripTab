@@ -1,4 +1,11 @@
 import type { Trip } from '../types'
+import {
+  canonicalAppUrl,
+  decodeTripShare,
+  encodeTripShare,
+  parseShareLocation,
+  shareLinkForTrip,
+} from './share'
 import { normalizeTrip } from './storage'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
@@ -24,38 +31,75 @@ async function request(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): 
   }
 }
 
-async function postSnapshot(trip: Trip): Promise<string> {
-  const res = await request(`${SNAPSHOT}/post`, {
-    method: 'POST',
-    body: JSON.stringify({ ...trip, isDemo: false }),
-  })
-  if (!res.ok) throw new Error('Could not sync trip')
-  const json = (await res.json()) as { key?: string }
-  if (!json.key) throw new Error('Could not sync trip')
-  return json.key
+async function postSnapshot(trip: Trip): Promise<string | null> {
+  try {
+    const res = await request(`${SNAPSHOT}/post`, {
+      method: 'POST',
+      body: JSON.stringify({ ...trip, isDemo: false }),
+    })
+    if (!res.ok) return null
+    const json = (await res.json()) as { key?: string }
+    return json.key && json.key.length > 3 ? json.key : null
+  } catch {
+    return null
+  }
 }
 
 async function readSnapshot(bin: string): Promise<Trip | null> {
-  const res = await request(`${SNAPSHOT}/${encodeURIComponent(bin)}`, { method: 'GET' })
-  if (!res.ok) return null
-  return normalizeTrip(await res.json())
+  try {
+    const res = await request(`${SNAPSHOT}/${encodeURIComponent(bin)}`, { method: 'GET' })
+    if (!res.ok) return null
+    return normalizeTrip(await res.json())
+  } catch {
+    return null
+  }
 }
 
-type Pointer = { id?: string; data?: { bin?: unknown }; bin?: unknown }
+type RoomBody = {
+  id?: string
+  name?: unknown
+  data?: unknown
+  payload?: unknown
+  bin?: unknown
+  people?: unknown
+  expenses?: unknown
+}
 
-function pointerBin(json: Pointer): string | null {
-  const bin = json.data && typeof json.data === 'object' ? json.data.bin : json.bin
-  return typeof bin === 'string' && bin.length > 3 ? bin : null
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function roomPayload(json: RoomBody): { payload?: string; bin?: string; trip?: Trip | null } {
+  const data = asRecord(json.data) ?? json
+  const payload =
+    typeof data.payload === 'string'
+      ? data.payload
+      : typeof json.payload === 'string'
+        ? json.payload
+        : undefined
+  const bin =
+    typeof data.bin === 'string' ? data.bin : typeof json.bin === 'string' ? json.bin : undefined
+  const tripLike = data.name && (data.people || data.expenses) ? data : json.name && json.people ? json : null
+  return {
+    payload,
+    bin,
+    trip: tripLike ? normalizeTrip(tripLike) : null,
+  }
+}
+
+function roomData(trip: Trip, bin?: string | null) {
+  const payload = encodeTripShare({ ...trip, isDemo: false })
+  return bin ? { payload, bin } : { payload }
 }
 
 export async function createLiveRoom(trip: Trip): Promise<string> {
   const bin = await postSnapshot(trip)
   const res = await request(ROOM, {
     method: 'POST',
-    body: JSON.stringify({ name: 'triptab', data: { bin } }),
+    body: JSON.stringify({ name: 'triptab', data: roomData(trip, bin) }),
   })
   if (!res.ok) throw new Error('Could not create a live trip')
-  const json = (await res.json()) as Pointer
+  const json = (await res.json()) as RoomBody
   if (!json.id) throw new Error('Could not create a live trip')
   return json.id
 }
@@ -64,9 +108,11 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
   try {
     const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, { method: 'GET' })
     if (!res.ok) return null
-    const bin = pointerBin((await res.json()) as Pointer)
-    if (!bin) return null
-    const trip = await readSnapshot(bin)
+    const extracted = roomPayload((await res.json()) as RoomBody)
+    const fromPayload = extracted.payload ? decodeTripShare(extracted.payload) : null
+    const fromObject = extracted.trip
+    const fromBin = extracted.bin ? await readSnapshot(extracted.bin) : null
+    const trip = fromPayload ?? fromObject ?? fromBin
     if (!trip) return null
     return { ...trip, shareId, isDemo: false }
   } catch {
@@ -75,12 +121,25 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 }
 
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
-  const bin = await postSnapshot({ ...trip, shareId })
+  const withId = { ...trip, shareId, isDemo: false }
+  const bin = await postSnapshot(withId)
   const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, {
     method: 'PUT',
-    body: JSON.stringify({ name: 'triptab', data: { bin } }),
+    body: JSON.stringify({ name: 'triptab', data: roomData(withId, bin) }),
   })
   if (!res.ok) throw new Error('Could not sync trip')
+}
+
+export async function ensureLiveRoom(trip: Trip): Promise<string> {
+  if (trip.shareId) {
+    try {
+      await pushLiveTrip(trip.shareId, trip)
+      return trip.shareId
+    } catch {
+      /* room expired — mint a new one so the next invite still syncs */
+    }
+  }
+  return createLiveRoom(trip)
 }
 
 function byId<T extends { id: string }>(items: T[]): Map<string, T> {
@@ -124,6 +183,34 @@ export function mergeTrips(local: Trip, remote: Trip): Trip {
   }
 }
 
+export function adoptSharedTrip(
+  trips: Trip[],
+  incoming: Trip,
+  shareId?: string | null,
+): { trips: Trip[]; currentTripId: string } {
+  const tagged: Trip = {
+    ...incoming,
+    shareId: shareId || incoming.shareId,
+    isDemo: false,
+  }
+  const existing = trips.find(
+    (t) => (tagged.shareId && t.shareId === tagged.shareId) || t.id === incoming.id,
+  )
+  if (existing) {
+    const merged = mergeTrips(existing, { ...tagged, id: existing.id })
+    return {
+      trips: trips.map((t) =>
+        t.id === existing.id ? { ...merged, id: existing.id, shareId: tagged.shareId || existing.shareId } : t,
+      ),
+      currentTripId: existing.id,
+    }
+  }
+  return {
+    trips: [tagged, ...trips],
+    currentTripId: tagged.id,
+  }
+}
+
 export function tripFingerprint(trip: Trip): string {
   return [
     trip.updatedAt,
@@ -134,26 +221,24 @@ export function tripFingerprint(trip: Trip): string {
   ].join('|')
 }
 
-export function liveShareUrl(shareId: string): string {
-  const url = new URL(window.location.href)
-  url.hash = ''
-  url.search = ''
+export function liveShareUrl(shareId: string, trip?: Trip): string {
+  if (trip) return shareLinkForTrip(trip, shareId)
+  const url = new URL(canonicalAppUrl())
   url.searchParams.set('t', shareId)
   return url.toString()
 }
 
 export function parseLiveShareId(): string | null {
-  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash
-  const fromHash = new URLSearchParams(hash.includes('=') ? hash : '')
-  const fromQuery = new URLSearchParams(window.location.search)
-  const id = fromQuery.get('t') || fromQuery.get('trip') || fromHash.get('t') || fromHash.get('trip')
-  return id && id.length > 4 ? id : null
+  if (typeof window === 'undefined') return null
+  return parseShareLocation(window.location.href).shareId
 }
 
 export function setLiveShareHash(shareId: string): void {
   const url = new URL(window.location.href)
   url.searchParams.set('t', shareId)
   url.searchParams.delete('trip')
+  url.searchParams.delete('s')
+  url.searchParams.delete('import')
   url.hash = ''
   const next = `${url.pathname}${url.search}`
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
@@ -165,6 +250,8 @@ export function clearLiveShareLocation(): void {
   const url = new URL(window.location.href)
   url.searchParams.delete('t')
   url.searchParams.delete('trip')
+  url.searchParams.delete('s')
+  url.searchParams.delete('import')
   url.hash = ''
   window.history.replaceState(null, '', `${url.pathname}${url.search}`)
 }

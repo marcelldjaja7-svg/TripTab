@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Expense, Trip } from '../types'
 import { defaultCategories } from './demo'
-import { mergeTrips } from './sync'
+import { encodeTripShare } from './share'
+import { adoptSharedTrip, mergeTrips, pullLiveTrip } from './sync'
 
 function trip(over: Partial<Trip> & Pick<Trip, 'people' | 'expenses'>): Trip {
   return {
@@ -93,28 +94,90 @@ describe('mergeTrips', () => {
   })
 })
 
-describe('live room API', () => {
-  it('creates and reads a trip room', async () => {
+describe('adoptSharedTrip', () => {
+  it('merges a snapshot into the existing trip instead of ignoring new bills', () => {
+    const local = trip({
+      id: 't',
+      shareId: 'room1',
+      updatedAt: 10,
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: 'a' })],
+    })
+    const incoming = trip({
+      id: 't',
+      shareId: 'room1',
+      updatedAt: 40,
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e2', paidBy: 'a', amount: 12 })],
+    })
+    const next = adoptSharedTrip([local], incoming, 'room1')
+    expect(next.currentTripId).toBe('t')
+    expect(next.trips[0].expenses.map((e) => e.id).sort()).toEqual(['e1', 'e2'])
+  })
+})
+
+describe('live room payload', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('reads a trip from the room payload without bytebin', async () => {
     const sample = trip({
       name: 'API check',
       people: [{ id: 'a', name: 'A', color: '#000' }],
       expenses: [],
     })
-    const { createLiveRoom, pullLiveTrip, pushLiveTrip } = await import('./sync')
-    const id = await createLiveRoom(sample)
-    expect(id.length).toBeGreaterThan(8)
-    const loaded = await pullLiveTrip(id)
+    const encoded = encodeTripShare(sample)
+    const shareId = 'ff808181payload1'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes(shareId)) {
+          return new Response(JSON.stringify({ id: shareId, name: 'triptab', data: { payload: encoded } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const loaded = await pullLiveTrip(shareId)
     expect(loaded?.name).toBe('API check')
-    expect(loaded?.shareId).toBe(id)
+    expect(loaded?.shareId).toBe(shareId)
+  })
 
-    const withBill = {
-      ...sample,
-      shareId: id,
-      updatedAt: Date.now(),
-      expenses: [expense({ id: 'e-live', paidBy: 'a', amount: 25, updatedAt: Date.now() })],
-    }
-    await pushLiveTrip(id, withBill)
-    const again = await pullLiveTrip(id)
-    expect(again?.expenses.map((e) => e.id)).toContain('e-live')
-  }, 25000)
+  it('writes a payload when creating and updating a room', async () => {
+    const sample = trip({
+      name: 'API check',
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.includes('/objects') && method === 'POST') {
+        return new Response(JSON.stringify({ id: 'ff808181newroom1', name: 'triptab' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.includes('ff808181newroom1') && method === 'PUT') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { data?: { payload?: string } }
+        expect(body.data?.payload).toBeTruthy()
+        return new Response(JSON.stringify({ id: 'ff808181newroom1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { createLiveRoom, pushLiveTrip } = await import('./sync')
+    const id = await createLiveRoom(sample)
+    expect(id).toBe('ff808181newroom1')
+    await pushLiveTrip(id, { ...sample, shareId: id, expenses: [expense({ id: 'e-live', paidBy: 'a' })] })
+    expect(fetchMock).toHaveBeenCalled()
+  })
 })

@@ -41,7 +41,7 @@ export function TripSettings({
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(shareUrlForTrip(trip))
-      onNotify('Share link copied')
+      onNotify('Invite link copied')
     } catch {
       onNotify('Could not copy link')
     }
@@ -338,7 +338,7 @@ export function TripSettings({
 
       <SectionLabel>Share with friends</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Send a live link. Anyone who opens it can add expenses on their own phone. Anyone with the link can edit.
+        Send a link. Friends open it on any phone — the trip is in the link, so it works even if live sync is briefly down. Anyone with the link can edit.
       </p>
       <Group>
         <GroupRow
@@ -355,7 +355,7 @@ export function TripSettings({
         </GroupRow>
         <GroupRow onClick={() => void copyLink()}>
           <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
-          <span className="flex-1 text-[17px]">Copy Snapshot Link</span>
+          <span className="flex-1 text-[17px]">Copy Invite Link</span>
         </GroupRow>
         <GroupRow onClick={() => downloadJson(`${slugify(trip.name)}.triptab.json`, trip)}>
           <Download size={16} strokeWidth={1.75} className="text-[var(--accent)]" />

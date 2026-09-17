@@ -158,10 +158,10 @@ export function sharesMatchTotal(
   return toMinor(sharesSum(shares), decimals) === toMinor(total, decimals)
 }
 
-export function tripTotalBase(trip: Trip): number {
+export function tripTotalBase(trip: Trip, expenses: Expense[] = trip.expenses): number {
   const decimals = currencyDecimals(trip.baseCurrency)
   let minor = 0
-  for (const expense of trip.expenses) {
+  for (const expense of expenses) {
     if (isSettlement(trip, expense)) continue
     minor += toBaseMinor(expense.amount, expense.currency, trip)
   }
