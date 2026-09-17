@@ -5,6 +5,11 @@ import { captureShareLocation, shareLinkForTrip } from './lib/share'
 import { nextPersonColor } from './lib/colors'
 import { defaultAppData, loadAppData, normalizeAppData, normalizeTrip, saveAppData } from './lib/storage'
 import {
+  pullLatestLiveTrip,
+  subscribeLivePings,
+  tripFromPing,
+} from './lib/live'
+import {
   adoptSharedTrip,
   clearLiveShareLocation,
   ensureLiveRoom,
@@ -109,7 +114,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     joining.current = true
     void (async () => {
       try {
-        const remote = await pullLiveTrip(liveId)
+        const remote = (await pullLatestLiveTrip(liveId)) ?? (await pullLiveTrip(liveId))
         if (remote) {
           setData((prev) => {
             const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
@@ -143,7 +148,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
-          const remote = await pullLiveTrip(shareId)
+          const remote = await pullLatestLiveTrip(shareId)
           const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? trip
           const merged = remote ? mergeTrips(latest, remote) : latest
           await pushLiveTrip(shareId, merged)
@@ -157,17 +162,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           /* stay local if the room is briefly unreachable */
         }
       })()
-    }, 700)
+    }, 160)
     return () => window.clearTimeout(handle)
   }, [liveSig])
 
   useEffect(() => {
     const shareId = currentTrip?.shareId
     if (!shareId) return
-    const tick = async () => {
-      if (document.hidden || joining.current) return
-      const remote = await pullLiveTrip(shareId)
-      if (!remote) return
+    const applyRemote = (remote: Trip) => {
       setData((prev) => {
         const local = prev.trips.find((t) => t.shareId === shareId)
         if (!local) return prev
@@ -179,11 +181,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       })
     }
-    const interval = window.setInterval(() => void tick(), 4000)
-    const onVis = () => void tick()
+    const unsub = subscribeLivePings(shareId, (ping) => {
+      void tripFromPing(ping, shareId).then((remote) => {
+        if (remote) applyRemote(remote)
+      })
+    })
+    const onVis = () => {
+      if (document.hidden) return
+      void pullLatestLiveTrip(shareId).then((remote) => {
+        if (remote) applyRemote(remote)
+      })
+    }
     document.addEventListener('visibilitychange', onVis)
+    void pullLatestLiveTrip(shareId).then((remote) => {
+      if (remote) applyRemote(remote)
+    })
     return () => {
-      window.clearInterval(interval)
+      unsub()
       document.removeEventListener('visibilitychange', onVis)
     }
   }, [currentTrip?.shareId])

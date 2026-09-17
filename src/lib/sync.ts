@@ -6,6 +6,7 @@ import {
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
+import { publishLivePing } from './live'
 import { normalizeTrip } from './storage'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
@@ -93,15 +94,12 @@ function roomData(trip: Trip, bin?: string | null) {
 }
 
 export async function createLiveRoom(trip: Trip): Promise<string> {
-  const bin = await postSnapshot(trip)
-  const res = await request(ROOM, {
-    method: 'POST',
-    body: JSON.stringify({ name: 'triptab', data: roomData(trip, bin) }),
-  })
-  if (!res.ok) throw new Error('Could not create a live trip')
-  const json = (await res.json()) as RoomBody
-  if (!json.id) throw new Error('Could not create a live trip')
-  return json.id
+  const shareId =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? `tt${crypto.randomUUID().replace(/-/g, '')}`
+      : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  await pushLiveTrip(shareId, { ...trip, shareId, isDemo: false })
+  return shareId
 }
 
 export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
@@ -123,21 +121,22 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
   const bin = await postSnapshot(withId)
-  const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, {
-    method: 'PUT',
-    body: JSON.stringify({ name: 'triptab', data: roomData(withId, bin) }),
-  })
-  if (!res.ok) throw new Error('Could not sync trip')
+  await publishLivePing(shareId, withId, bin)
+  try {
+    const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ name: 'triptab', data: roomData(withId, bin) }),
+    })
+    if (res.ok) return
+  } catch {
+    /* live channel already has the update */
+  }
 }
 
 export async function ensureLiveRoom(trip: Trip): Promise<string> {
   if (trip.shareId) {
-    try {
-      await pushLiveTrip(trip.shareId, trip)
-      return trip.shareId
-    } catch {
-      /* room expired — mint a new one so the next invite still syncs */
-    }
+    await pushLiveTrip(trip.shareId, trip)
+    return trip.shareId
   }
   return createLiveRoom(trip)
 }

@@ -18,11 +18,11 @@ On your phone on the same Wi‑Fi, you can also use your computer’s LAN addres
 1. Deploy TripTab so it has a public URL. After this repo is on GitHub, turn on **Settings → Pages → GitHub Actions**, merge to `main`, and open:
    `https://marcelldjaja7-svg.github.io/TripTab/`
 2. Create a trip, tap the **share** button (or **Trip → Invite Friends**).
-3. Send that link (it looks like `…/TripTab/?t=…#s=…`). Friends open it on any phone. The trip is packed into the link, so it opens even if live sync is briefly down. When live sync is up, expenses they add show up for everyone (the trip syncs every few seconds). Anyone with the link can edit.
+3. Send that link (it looks like `…/TripTab/?t=…#s=…`). Friends open it on any phone. The trip is packed into the link, so it opens even if live sync is briefly down. When someone adds a bill, it shows up on everyone else’s phone right away. Anyone with the link can edit.
 
 Until the site is deployed, an invite copied from `localhost` only works on this computer.
 
-Live rooms use a public paste host so no account is required. Anyone with the link can edit. If a room expires, the same invite still opens the snapshot in the link — download JSON as a backup.
+Live rooms use a public realtime channel so no account is required. Anyone with the link can edit. If a room expires, the same invite still opens the snapshot in the link — download JSON as a backup.
 
 Production build:
 
@@ -60,7 +60,7 @@ No API keys are required to use TripTab. Optional extras:
    - Tap **Out** to exclude someone from that expense. **Everyone** / **Just payer** are shortcuts.
 4. **Set conversion rates** — when an expense isn’t in IDR (or your chosen base), set e.g. “1 USD = 16200 IDR”. Edit rates anytime under **Trip**. Live fetch is a shortcut, not a requirement.
 5. **Settle up** — open the settle tab for net balances and the fewest suggested payments. Copy a payment, or tap **Log payment** after someone actually pays.
-6. **Share with friends** — tap share / **Invite Friends**. The link opens the trip immediately on their phone. Copy a text summary or download JSON as a backup.
+6. **Share with friends** — tap share / **Invite Friends**. The link opens the trip immediately on their phone, and new bills show up for everyone in real time. Copy a text summary or download JSON as a backup.
 7. **Filter** — on Expenses, tap **Filter** to show bills for selected friends and categories. Spent and logged counts update to match.
 
 Use the sun/moon control to switch light and dark. There’s a **Bali demo trip** on the home screen if you want to click around before creating your own.
