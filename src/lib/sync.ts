@@ -2,6 +2,7 @@ import type { Trip } from '../types'
 import {
   canonicalAppUrl,
   decodeTripShare,
+  encodeTripShare,
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
@@ -220,14 +221,14 @@ export function parseLiveShareId(): string | null {
   return parseShareLocation(window.location.href).shareId
 }
 
-export function setLiveShareHash(shareId: string): void {
+export function setLiveShareHash(shareId: string, trip?: Trip): void {
   const url = new URL(window.location.href)
   url.searchParams.set('t', shareId)
   url.searchParams.delete('trip')
   url.searchParams.delete('s')
   url.searchParams.delete('import')
-  url.hash = ''
-  const next = `${url.pathname}${url.search}`
+  if (trip) url.hash = `s=${encodeTripShare(trip)}`
+  const next = `${url.pathname}${url.search}${url.hash}`
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
     window.history.replaceState(null, '', next)
   }

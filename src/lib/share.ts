@@ -58,8 +58,20 @@ function describeNet(b: PersonBalance, currency: string): string {
   return `owes ${formatMoney(-b.net, currency)}`
 }
 
+/** Drop unused FX rates so invite hashes and live pings stay small. */
+export function compactTripForShare(trip: Trip): Trip {
+  const used = new Set<string>([trip.baseCurrency])
+  for (const expense of trip.expenses) used.add(expense.currency)
+  const rates: Record<string, number> = { [trip.baseCurrency]: 1 }
+  for (const code of used) {
+    const n = trip.rates[code]
+    if (typeof n === 'number' && n > 0) rates[code] = n
+  }
+  return { ...trip, rates, isDemo: false }
+}
+
 export function encodeTripShare(trip: Trip): string {
-  const json = JSON.stringify({ ...trip, isDemo: false })
+  const json = JSON.stringify(compactTripForShare(trip))
   const bytes = new TextEncoder().encode(json)
   let binary = ''
   bytes.forEach((b) => {

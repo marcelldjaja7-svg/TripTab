@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ratesForBase } from './currencies'
 import { defaultCategories } from './demo'
 import {
-  compactLiveTrip,
   liveSseUrl,
   liveTopic,
   parseLivePing,
@@ -10,7 +9,7 @@ import {
   subscribeLivePings,
   tripFromPing,
 } from './live'
-import { encodeTripShare } from './share'
+import { compactTripForShare, decodeTripShare, encodeTripShare } from './share'
 import type { Trip } from '../types'
 
 const sample: Trip = {
@@ -42,7 +41,7 @@ describe('live channel', () => {
 
   it('replays history on the SSE URL so a late phone still gets the last bill', () => {
     expect(liveSseUrl('ttroom')).toContain('/sse?since=all')
-    expect(liveSseUrl('ttroom')).toContain('ttroom')
+    expect(liveSseUrl('ttroom', 'https://ntfy.adminforge.de')).toContain('ntfy.adminforge.de')
   })
 
   it('parses a live ping and ignores keepalives', () => {
@@ -85,9 +84,10 @@ describe('live channel', () => {
         },
       ],
     }
-    const compact = compactLiveTrip(fat)
+    const compact = compactTripForShare(fat)
     expect(Object.keys(compact.rates).sort()).toEqual(['IDR', 'USD'])
-    expect(encodeTripShare(compact).length).toBeLessThan(4000)
+    expect(encodeTripShare(fat).length).toBeLessThan(4000)
+    expect(decodeTripShare(encodeTripShare(fat))?.expenses).toHaveLength(1)
   })
 
   it('reads the latest ping from an ntfy poll stream', async () => {
@@ -133,7 +133,8 @@ describe('live channel', () => {
     const unsub = subscribeLivePings('tt-sse-room', (ping) => {
       seen.push(ping.by)
     })
-    expect(opened[0]).toContain('since=all')
+    expect(opened.some((url) => url.includes('since=all'))).toBe(true)
+    expect(opened.some((url) => url.includes('adminforge') || url.includes('envs.net'))).toBe(true)
     FakeSource.current?.onmessage?.({
       data: JSON.stringify({
         event: 'message',

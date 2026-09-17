@@ -121,19 +121,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const remote =
           (await pullLatestLiveTrip(liveId)) ??
           (await pullLiveTrip(liveId)) ??
-          (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 4000))
+          (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 2500))
         if (remote) {
           setData((prev) => {
             const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
             saveAppData(next)
             return next
           })
-          setLiveShareHash(liveId)
+          setLiveShareHash(liveId, remote)
           if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
           return
         }
         if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
-          setLiveShareHash(liveId)
+          setLiveShareHash(liveId, snapshot ?? localMatch ?? undefined)
           return
         }
         notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
@@ -159,6 +159,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? trip
           const merged = remote ? mergeTrips(latest, remote) : latest
           await pushLiveTrip(shareId, merged)
+          setLiveShareHash(shareId, merged)
           if (tripFingerprint(merged) !== tripFingerprint(latest)) {
             setData((prev) => ({
               ...prev,
@@ -254,7 +255,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const trip = data.trips.find((t) => t.id === id)
         if (trip?.shareId) {
           setLiveRoomId(trip.shareId)
-          setLiveShareHash(trip.shareId)
+          setLiveShareHash(trip.shareId, trip)
         } else {
           setLiveRoomId(null)
           clearLiveShareLocation()
@@ -341,7 +342,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
           }))
           setLiveRoomId(shareId)
-          setLiveShareHash(shareId)
+          setLiveShareHash(shareId, next)
         } catch {
           /* snapshot in the link still opens the trip */
         }

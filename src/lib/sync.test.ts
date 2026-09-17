@@ -163,7 +163,7 @@ describe('live room payload', () => {
           headers: { 'Content-Type': 'application/json' },
         })
       }
-      if (url.includes('ntfy.sh')) {
+      if (url.includes('ntfy')) {
         return new Response('{}', { status: 200 })
       }
       if (url.includes('/objects') && method === 'PUT') {
@@ -180,6 +180,6 @@ describe('live room payload', () => {
     expect(id.startsWith('tt')).toBe(true)
     await pushLiveTrip(id, { ...sample, shareId: id, expenses: [expense({ id: 'e-live', paidBy: 'a' })] })
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
-    expect(urls.some((url) => url.includes('ntfy.sh'))).toBe(true)
+    expect(urls.some((url) => url.includes('ntfy'))).toBe(true)
   })
 })

@@ -2,7 +2,12 @@ import type { Trip } from '../types'
 import { decodeTripShare, encodeTripShare } from './share'
 import { normalizeTrip } from './storage'
 
-const NTFY = 'https://ntfy.sh'
+export const LIVE_RELAYS = [
+  'https://ntfy.sh',
+  'https://ntfy.adminforge.de',
+  'https://ntfy.envs.net',
+] as const
+
 const SNAPSHOT = 'https://bytebin.lucko.me'
 const CLIENT_KEY = 'triptab.client'
 const LIVE_CACHE = 'triptab.live.'
@@ -49,25 +54,14 @@ function channelFor(shareId: string): BroadcastChannel | null {
   }
 }
 
-export function compactLiveTrip(trip: Trip): Trip {
-  const used = new Set<string>([trip.baseCurrency])
-  for (const expense of trip.expenses) used.add(expense.currency)
-  const rates: Record<string, number> = { [trip.baseCurrency]: 1 }
-  for (const code of used) {
-    const n = trip.rates[code]
-    if (typeof n === 'number' && n > 0) rates[code] = n
-  }
-  return { ...trip, rates, isDemo: false }
-}
-
 export function liveTopic(shareId: string): string {
   const clean = shareId.replace(/[^a-zA-Z0-9_-]/g, '')
   const topic = clean.startsWith('tt') ? clean : `tt${clean}`
   return topic.slice(0, 64)
 }
 
-export function liveSseUrl(shareId: string): string {
-  return `${NTFY}/${encodeURIComponent(liveTopic(shareId))}/sse?since=all`
+export function liveSseUrl(shareId: string, relay: string = LIVE_RELAYS[0]): string {
+  return `${relay}/${encodeURIComponent(liveTopic(shareId))}/sse?since=all`
 }
 
 export function parseLivePing(raw: unknown): LivePing | null {
@@ -105,53 +99,75 @@ function emitPing(shareId: string, raw: unknown): void {
   listeners.get(shareId)?.forEach((fn) => fn(ping))
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit, ms = 4000): Promise<Response> {
+  const controller = new AbortController()
+  const timer = globalThis.setTimeout(() => controller.abort(), ms)
+  try {
+    return await fetch(url, { ...init, signal: controller.signal, credentials: 'omit' })
+  } finally {
+    globalThis.clearTimeout(timer)
+  }
+}
+
 function ensureTransport(shareId: string): void {
   if (transports.has(shareId)) return
-  let source: EventSource | null = null
-  let reconnect = 0
   let stopped = false
+  let openCount = 0
+  const sources: EventSource[] = []
+  const reconnects: number[] = []
 
-  const attach = (es: EventSource) => {
-    es.onmessage = (event) => {
-      try {
-        emitPing(shareId, JSON.parse(event.data) as unknown)
-      } catch {
-        emitPing(shareId, event.data)
+  const attach = (relay: string, delay = 0) => {
+    const start = () => {
+      if (stopped || typeof EventSource === 'undefined') return
+      const es = new EventSource(liveSseUrl(shareId, relay))
+      sources.push(es)
+      es.onopen = () => {
+        openCount += 1
+      }
+      es.onmessage = (event) => {
+        try {
+          emitPing(shareId, JSON.parse(event.data) as unknown)
+        } catch {
+          emitPing(shareId, event.data)
+        }
+      }
+      es.onerror = () => {
+        if (stopped) return
+        if (es.readyState === EventSource.CLOSED) {
+          openCount = Math.max(0, openCount - 1)
+          es.close()
+          const wait = Math.min(15000, Math.max(800, delay || 800) * 2)
+          reconnects.push(
+            globalThis.setTimeout(() => {
+              if (!stopped) attach(relay, wait)
+            }, wait),
+          )
+        }
       }
     }
-    es.onerror = () => {
-      if (stopped || es.readyState !== EventSource.CLOSED) return
-      es.close()
-      reconnect = globalThis.setTimeout(() => {
-        if (stopped) return
-        source = openSource()
-      }, 800)
-    }
+    if (delay) reconnects.push(globalThis.setTimeout(start, delay))
+    else start()
   }
 
-  const openSource = (): EventSource | null => {
-    if (typeof EventSource === 'undefined') return null
-    const es = new EventSource(liveSseUrl(shareId))
-    attach(es)
-    return es
-  }
+  for (const relay of LIVE_RELAYS) attach(relay)
 
-  source = openSource()
   const channel = channelFor(shareId)
   if (channel) {
     channel.onmessage = (event) => emitPing(shareId, event.data)
   }
+
   const poll = globalThis.setInterval(() => {
+    if (openCount > 0) return
     void pollLivePings(shareId).then((pings) => {
       const last = pings.at(-1)
       if (last) emitPing(shareId, last)
     })
-  }, 2000)
+  }, 8000)
 
   transports.set(shareId, () => {
     stopped = true
-    source?.close()
-    globalThis.clearTimeout(reconnect)
+    for (const es of sources) es.close()
+    for (const handle of reconnects) globalThis.clearTimeout(handle)
     globalThis.clearInterval(poll)
     transports.delete(shareId)
   })
@@ -159,7 +175,7 @@ function ensureTransport(shareId: string): void {
 
 export function rememberLiveTrip(shareId: string, trip: Trip): void {
   try {
-    localStorage.setItem(LIVE_CACHE + shareId, encodeTripShare(compactLiveTrip({ ...trip, shareId })))
+    localStorage.setItem(LIVE_CACHE + shareId, encodeTripShare({ ...trip, shareId }))
   } catch {
     /* quota / private mode */
   }
@@ -201,76 +217,83 @@ function pingFingerprint(trip: Trip): string {
 }
 
 export async function publishLivePing(shareId: string, trip: Trip, bin?: string | null): Promise<void> {
-  const compact = compactLiveTrip({ ...trip, shareId })
+  const withId = { ...trip, shareId, isDemo: false }
   const ping: LivePing = {
     v: 1,
     bin: bin || undefined,
-    fp: pingFingerprint(compact),
+    fp: pingFingerprint(withId),
     at: Date.now(),
     by: liveClientId(),
   }
-  const encoded = encodeTripShare(compact)
+  const encoded = encodeTripShare(withId)
   ping.p = encoded
-  rememberLiveTrip(shareId, compact)
+  rememberLiveTrip(shareId, withId)
   try {
     channelFor(shareId)?.postMessage(ping)
   } catch {
     /* older browsers */
   }
   const forNtfy: LivePing = encoded.length <= PING_MAX ? ping : { ...ping, p: undefined }
-  if (!forNtfy.p && !forNtfy.bin) {
-    forNtfy.p = encoded
-  }
+  if (!forNtfy.p && !forNtfy.bin) forNtfy.p = encoded
   const body = JSON.stringify(forNtfy)
-  const controller = new AbortController()
-  const timer = globalThis.setTimeout(() => controller.abort(), 4000)
-  try {
-    await fetch(`${NTFY}/${liveTopic(shareId)}`, {
-      method: 'POST',
-      body,
-      credentials: 'omit',
-      signal: controller.signal,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    })
-  } catch {
-    /* BroadcastChannel and SSE peers may still be in sync */
-  } finally {
-    globalThis.clearTimeout(timer)
-  }
+  const topic = liveTopic(shareId)
+  await Promise.allSettled(
+    LIVE_RELAYS.map((relay) =>
+      fetchWithTimeout(
+        `${relay}/${topic}`,
+        {
+          method: 'POST',
+          body,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        },
+        2000,
+      ),
+    ),
+  )
 }
 
 export async function pollLivePings(shareId: string): Promise<LivePing[]> {
-  try {
-    const res = await fetch(`${NTFY}/${liveTopic(shareId)}/json?poll=1&since=all`, {
-      method: 'GET',
-      credentials: 'omit',
-    })
-    if (!res.ok) return []
-    const text = await res.text()
-    const pings: LivePing[] = []
-    for (const line of text.split('\n')) {
-      if (!line.trim()) continue
+  const topic = liveTopic(shareId)
+  const rows = await Promise.all(
+    LIVE_RELAYS.map(async (relay) => {
       try {
-        const ping = ntfyMessage(JSON.parse(line) as unknown)
-        if (ping) pings.push(ping)
+        const res = await fetchWithTimeout(`${relay}/${topic}/json?poll=1&since=all`, { method: 'GET' }, 2000)
+        if (!res.ok) return [] as LivePing[]
+        const text = await res.text()
+        const pings: LivePing[] = []
+        for (const line of text.split('\n')) {
+          if (!line.trim()) continue
+          try {
+            const ping = ntfyMessage(JSON.parse(line) as unknown)
+            if (ping) pings.push(ping)
+          } catch {
+            /* skip bad line */
+          }
+        }
+        return pings
       } catch {
-        /* skip bad line */
+        return [] as LivePing[]
       }
-    }
-    return pings
-  } catch {
-    return []
+    }),
+  )
+  const seen = new Set<string>()
+  const merged: LivePing[] = []
+  for (const ping of rows.flat().sort((a, b) => a.at - b.at)) {
+    const key = `${ping.by}:${ping.fp}:${ping.at}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    merged.push(ping)
   }
+  return merged
 }
 
 export async function pullLatestLiveTrip(shareId: string): Promise<Trip | null> {
-  const cached = recalledLiveTrip(shareId)
   const pings = await pollLivePings(shareId)
   for (let i = pings.length - 1; i >= 0; i--) {
     const trip = await tripFromPing(pings[i]!, shareId)
     if (trip) return trip
   }
-  return cached
+  return recalledLiveTrip(shareId)
 }
 
 export function subscribeLivePings(shareId: string, onPing: (ping: LivePing) => void): () => void {
@@ -284,12 +307,12 @@ export function subscribeLivePings(shareId: string, onPing: (ping: LivePing) => 
   }
 }
 
-export async function waitForLiveTrip(shareId: string, ms = 4000): Promise<Trip | null> {
+export async function waitForLiveTrip(shareId: string, ms = 2500): Promise<Trip | null> {
   const started = Date.now()
   while (Date.now() - started < ms) {
     const trip = await pullLatestLiveTrip(shareId)
     if (trip) return trip
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 300))
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 600))
   }
   return pullLatestLiveTrip(shareId)
 }
