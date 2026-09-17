@@ -115,8 +115,10 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
-  const bin = await postSnapshot(withId)
-  await publishLivePing(shareId, withId, bin)
+  await publishLivePing(shareId, withId)
+  void postSnapshot(withId).then((bin) => {
+    if (bin) void publishLivePing(shareId, withId, bin)
+  })
 }
 
 export async function ensureLiveRoom(trip: Trip): Promise<string> {

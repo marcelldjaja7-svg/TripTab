@@ -3,11 +3,12 @@ import type { AppData, Theme, Trip } from './types'
 import { createDemoTrip, emptyTrip } from './lib/demo'
 import { captureShareLocation, shareLinkForTrip } from './lib/share'
 import { nextPersonColor } from './lib/colors'
-import { defaultAppData, loadAppData, normalizeAppData, normalizeTrip, saveAppData } from './lib/storage'
+import { defaultAppData, loadAppData, normalizeAppData, normalizeTrip, saveAppData, STORAGE_KEY } from './lib/storage'
 import {
   pullLatestLiveTrip,
   subscribeLivePings,
   tripFromPing,
+  waitForLiveTrip,
 } from './lib/live'
 import {
   adoptSharedTrip,
@@ -66,6 +67,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return loaded
   })
   const [toast, setToast] = useState<Toast | null>(null)
+  const [liveRoomId, setLiveRoomId] = useState<string | null>(() =>
+    typeof window === 'undefined' ? null : captureShareLocation(window.location.href).shareId,
+  )
   const dataRef = useRef(data)
   dataRef.current = data
   const joining = useRef(false)
@@ -114,7 +118,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     joining.current = true
     void (async () => {
       try {
-        const remote = (await pullLatestLiveTrip(liveId)) ?? (await pullLiveTrip(liveId))
+        const remote =
+          (await pullLatestLiveTrip(liveId)) ??
+          (await pullLiveTrip(liveId)) ??
+          (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 4000))
         if (remote) {
           setData((prev) => {
             const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
@@ -125,11 +132,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
           return
         }
-        if (localMatch || snapshot) {
+        if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
           setLiveShareHash(liveId)
           return
         }
-        notify('Could not open the shared trip. Check the link and try again.')
+        notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
       } finally {
         joining.current = false
       }
@@ -162,23 +169,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           /* stay local if the room is briefly unreachable */
         }
       })()
-    }, 160)
+    }, 80)
     return () => window.clearTimeout(handle)
   }, [liveSig])
 
+  const activeShareId = currentTrip?.shareId ?? liveRoomId
+
   useEffect(() => {
-    const shareId = currentTrip?.shareId
+    const shareId = activeShareId
     if (!shareId) return
     const applyRemote = (remote: Trip) => {
       setData((prev) => {
-        const local = prev.trips.find((t) => t.shareId === shareId)
-        if (!local) return prev
-        const merged = mergeTrips(local, remote)
-        if (tripFingerprint(merged) === tripFingerprint(local)) return prev
-        return {
-          ...prev,
-          trips: prev.trips.map((t) => (t.id === local.id ? { ...merged, id: local.id, shareId } : t)),
+        const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, shareId) }
+        const before = prev.trips.find((t) => t.shareId === shareId)
+        const after = next.trips.find((t) => t.shareId === shareId)
+        if (
+          before &&
+          after &&
+          tripFingerprint(before) === tripFingerprint(after) &&
+          prev.currentTripId === next.currentTripId
+        ) {
+          return prev
         }
+        saveAppData(next)
+        return next
       })
     }
     const unsub = subscribeLivePings(shareId, (ping) => {
@@ -187,7 +201,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     })
     const onVis = () => {
-      if (document.hidden) return
       void pullLatestLiveTrip(shareId).then((remote) => {
         if (remote) applyRemote(remote)
       })
@@ -200,7 +213,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       unsub()
       document.removeEventListener('visibilitychange', onVis)
     }
-  }, [currentTrip?.shareId])
+  }, [activeShareId])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY || !event.newValue) return
+      try {
+        const incoming = normalizeAppData(JSON.parse(event.newValue) as unknown)
+        if (!incoming) return
+        setData((prev) => {
+          const shareId = prev.trips.find((t) => t.id === prev.currentTripId)?.shareId
+          const local = shareId ? prev.trips.find((t) => t.shareId === shareId) : null
+          const remote = shareId ? incoming.trips.find((t) => t.shareId === shareId) : null
+          if (!local || !remote) {
+            return { ...incoming, currentTripId: prev.currentTripId ?? incoming.currentTripId }
+          }
+          const merged = mergeTrips(local, remote)
+          if (tripFingerprint(merged) === tripFingerprint(local)) return prev
+          return {
+            ...prev,
+            trips: prev.trips.map((t) => (t.id === local.id ? { ...merged, id: local.id, shareId } : t)),
+          }
+        })
+      } catch {
+        /* ignore bad storage */
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   const value = useMemo<StoreValue>(() => {
     return {
@@ -211,8 +252,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       selectTrip: (id) => {
         setData((d) => ({ ...d, currentTripId: id }))
         const trip = data.trips.find((t) => t.id === id)
-        if (trip?.shareId) setLiveShareHash(trip.shareId)
-        else clearLiveShareLocation()
+        if (trip?.shareId) {
+          setLiveRoomId(trip.shareId)
+          setLiveShareHash(trip.shareId)
+        } else {
+          setLiveRoomId(null)
+          clearLiveShareLocation()
+        }
       },
       createTrip: (input) => {
         const trip = emptyTrip(input.name, input.emoji, input.baseCurrency, input.destinationId)
@@ -294,6 +340,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ...d,
             trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
           }))
+          setLiveRoomId(shareId)
           setLiveShareHash(shareId)
         } catch {
           /* snapshot in the link still opens the trip */
