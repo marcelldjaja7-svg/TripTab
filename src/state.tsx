@@ -347,17 +347,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         const url = shareLinkForTrip({ ...trip, shareId }, shareId)
         try {
-          if (navigator.share) {
+          await navigator.clipboard.writeText(url)
+        } catch {
+          /* share sheet below may still work */
+        }
+        const mobile = typeof navigator !== 'undefined' && /iPhone|iPad|Android/i.test(navigator.userAgent)
+        try {
+          if (mobile && navigator.share) {
             await navigator.share({
               title: trip.name,
               text: 'Open this TripTab link to add expenses with the group.',
               url,
             })
-          } else {
-            await navigator.clipboard.writeText(url)
           }
         } catch {
-          await navigator.clipboard.writeText(url)
+          try {
+            await navigator.clipboard.writeText(url)
+          } catch {
+            /* invite URL is still in the address bar as ?t= */
+          }
         }
         notify(
           isLocalHost()
