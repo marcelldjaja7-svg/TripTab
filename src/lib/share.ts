@@ -104,6 +104,18 @@ export type ParsedShare = {
   trip: Trip | null
 }
 
+let capturedShare: ParsedShare | undefined
+
+export function resetCapturedShare(): void {
+  capturedShare = undefined
+}
+
+/** Remember the first invite URL this page load so replaceState cannot drop the snapshot. */
+export function captureShareLocation(href: string): ParsedShare {
+  capturedShare ??= parseShareLocation(href)
+  return capturedShare
+}
+
 export function parseShareLocation(href: string): ParsedShare {
   const url = new URL(href)
   const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash

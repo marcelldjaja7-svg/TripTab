@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AppData, Theme, Trip } from './types'
 import { createDemoTrip, emptyTrip } from './lib/demo'
-import { parseShareLocation, shareLinkForTrip } from './lib/share'
+import { captureShareLocation, shareLinkForTrip } from './lib/share'
 import { nextPersonColor } from './lib/colors'
 import { defaultAppData, loadAppData, normalizeAppData, normalizeTrip, saveAppData } from './lib/storage'
 import {
@@ -45,6 +45,8 @@ type StoreValue = {
 
 const StoreContext = createContext<StoreValue | null>(null)
 
+let shareJoinStarted = false
+
 function applyTheme(theme: Theme) {
   const dark = theme !== 'light'
   document.documentElement.classList.toggle('dark', dark)
@@ -77,8 +79,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
-    const { shareId: liveId, trip: snapshot } = parseShareLocation(window.location.href)
+    if (shareJoinStarted) return
+    const { shareId: liveId, trip: snapshot } = captureShareLocation(window.location.href)
     if (!liveId && !snapshot) return
+    shareJoinStarted = true
 
     const localMatch = dataRef.current.trips.find(
       (t) => (liveId && t.shareId === liveId) || (snapshot && t.id === snapshot.id),
@@ -87,10 +91,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const incoming = snapshot ?? localMatch
       if (incoming) {
         setData((prev) => {
-          const next = adoptSharedTrip(prev.trips, incoming, liveId ?? incoming.shareId)
-          return { ...prev, ...next }
+          const next = { ...prev, ...adoptSharedTrip(prev.trips, incoming, liveId ?? incoming.shareId) }
+          saveAppData(next)
+          return next
         })
-        if (liveId) setLiveShareHash(liveId)
       }
     }
 
@@ -107,11 +111,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       try {
         const remote = await pullLiveTrip(liveId)
         if (remote) {
-          setLiveShareHash(liveId)
           setData((prev) => {
-            const next = adoptSharedTrip(prev.trips, remote, liveId)
-            return { ...prev, ...next }
+            const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
+            saveAppData(next)
+            return next
           })
+          setLiveShareHash(liveId)
           if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
           return
         }

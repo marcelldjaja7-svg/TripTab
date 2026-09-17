@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { createDemoTrip } from './demo'
 import {
+  captureShareLocation,
   canonicalAppUrl,
   decodeTripShare,
   encodeTripShare,
   parseShareLocation,
+  resetCapturedShare,
   shareLinkForTrip,
 } from './share'
 
@@ -49,5 +51,17 @@ describe('share URLs', () => {
     const parsed = parseShareLocation('https://marcelldjaja7-svg.github.io/TripTab/?t=ff808181abcd1')
     expect(parsed.shareId).toBe('ff808181abcd1')
     expect(parsed.trip).toBeNull()
+  })
+
+  it('keeps the snapshot after the live hash is stripped', () => {
+    resetCapturedShare()
+    const trip = createDemoTrip()
+    const href = shareLinkForTrip(trip, 'dead-room-xxxxx', 'http://localhost:5173/', './')
+    const first = captureShareLocation(href)
+    const later = captureShareLocation('http://localhost:5173/?t=dead-room-xxxxx')
+    expect(first.trip?.name).toBe(trip.name)
+    expect(later.trip?.name).toBe(trip.name)
+    expect(later.shareId).toBe('dead-room-xxxxx')
+    resetCapturedShare()
   })
 })
