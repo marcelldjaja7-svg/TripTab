@@ -59,7 +59,7 @@ function describeNet(b: PersonBalance, currency: string): string {
 }
 
 export function encodeTripShare(trip: Trip): string {
-  const json = JSON.stringify(trip)
+  const json = JSON.stringify({ ...trip, isDemo: false })
   const bytes = new TextEncoder().encode(json)
   let binary = ''
   bytes.forEach((b) => {
@@ -81,20 +81,75 @@ export function decodeTripShare(payload: string): Trip | null {
   }
 }
 
-export function shareUrlForTrip(trip: Trip): string {
-  const encoded = encodeTripShare(trip)
-  const url = new URL(window.location.href)
+/** Public app URL with a trailing slash so GitHub Pages invite links resolve. */
+export function canonicalAppUrl(
+  href: string = typeof window !== 'undefined' ? window.location.href : 'http://localhost/',
+  base: string = import.meta.env.BASE_URL,
+): string {
+  const loc = new URL(href)
+  if (base && base !== './' && base !== '.') {
+    const path = base.endsWith('/') ? base : `${base}/`
+    return `${loc.origin}${path.startsWith('/') ? path : `/${path}`}`
+  }
+  let path = loc.pathname.replace(/index\.html$/i, '')
+  if (!path.endsWith('/')) {
+    const last = path.split('/').pop() ?? ''
+    path = last.includes('.') ? path.slice(0, path.lastIndexOf('/') + 1) : `${path}/`
+  }
+  return `${loc.origin}${path}`
+}
+
+export type ParsedShare = {
+  shareId: string | null
+  trip: Trip | null
+}
+
+let capturedShare: ParsedShare | undefined
+
+export function resetCapturedShare(): void {
+  capturedShare = undefined
+}
+
+/** Remember the first invite URL this page load so replaceState cannot drop the snapshot. */
+export function captureShareLocation(href: string): ParsedShare {
+  capturedShare ??= parseShareLocation(href)
+  return capturedShare
+}
+
+export function parseShareLocation(href: string): ParsedShare {
+  const url = new URL(href)
+  const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
+  const hashParams = new URLSearchParams(hash.includes('=') ? hash : '')
+  const query = url.searchParams
+  const rawId = query.get('t') || query.get('trip') || hashParams.get('t') || hashParams.get('trip')
+  const payload = hashParams.get('s') || hashParams.get('import') || query.get('s') || query.get('import')
+  return {
+    shareId: rawId && rawId.length > 4 ? rawId : null,
+    trip: payload ? decodeTripShare(payload) : null,
+  }
+}
+
+export function shareLinkForTrip(
+  trip: Trip,
+  shareId: string | null | undefined = trip.shareId,
+  href?: string,
+  base?: string,
+): string {
+  const url = new URL(canonicalAppUrl(href, base ?? import.meta.env.BASE_URL))
   url.search = ''
-  url.hash = `import=${encoded}`
+  url.hash = ''
+  if (shareId) url.searchParams.set('t', shareId)
+  url.hash = `s=${encodeTripShare(trip)}`
   return url.toString()
 }
 
+export function shareUrlForTrip(trip: Trip): string {
+  return shareLinkForTrip(trip, trip.shareId)
+}
+
 export function parseImportFromLocation(): Trip | null {
-  const hash = window.location.hash.startsWith('#') ? window.location.hash.slice(1) : window.location.hash
-  const params = new URLSearchParams(hash.includes('=') ? hash : window.location.search)
-  const payload = params.get('import')
-  if (!payload) return null
-  return decodeTripShare(payload)
+  if (typeof window === 'undefined') return null
+  return parseShareLocation(window.location.href).trip
 }
 
 export function downloadJson(filename: string, data: unknown): void {
