@@ -1,13 +1,18 @@
 import type { Trip } from '../types'
 import {
+  SNAP_QUERY_MAX,
   canonicalAppUrl,
+  compactTripHeader,
   decodeTripShare,
   encodeTripShare,
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
 import { PING_MAX, publishLivePing } from './live'
+import { mergeTrips } from './merge'
 import { normalizeTrip } from './storage'
+
+export { mergeTrips, shouldPublishLive, tripFingerprint } from './merge'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
 const ROOM = 'https://api.restful-api.dev/objects'
@@ -144,49 +149,6 @@ export async function ensureLiveRoom(trip: Trip): Promise<string> {
   return createLiveRoom(trip)
 }
 
-function byId<T extends { id: string }>(items: T[]): Map<string, T> {
-  return new Map(items.map((item) => [item.id, item]))
-}
-
-export function mergeTrips(local: Trip, remote: Trip): Trip {
-  const newer = local.updatedAt >= remote.updatedAt ? local : remote
-  const older = newer === local ? remote : local
-  const deleted = new Set([...(local.deletedExpenseIds ?? []), ...(remote.deletedExpenseIds ?? [])])
-
-  const expenses = byId(local.expenses)
-  for (const expense of remote.expenses) {
-    const prev = expenses.get(expense.id)
-    if (!prev) {
-      expenses.set(expense.id, expense)
-      continue
-    }
-    const prevAt = prev.updatedAt ?? prev.createdAt
-    const nextAt = expense.updatedAt ?? expense.createdAt
-    expenses.set(expense.id, nextAt >= prevAt ? expense : prev)
-  }
-  for (const id of deleted) expenses.delete(id)
-
-  const people = byId(older.people)
-  for (const person of newer.people) people.set(person.id, person)
-
-  const categories = byId(older.categories)
-  for (const category of newer.categories) categories.set(category.id, category)
-
-  return {
-    ...newer,
-    shareId: local.shareId || remote.shareId,
-    people: [...people.values()],
-    categories: [...categories.values()],
-    expenses: [...expenses.values()].sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id)),
-    rates: { ...older.rates, ...newer.rates, [newer.baseCurrency]: 1 },
-    deletedExpenseIds: [...deleted],
-    isDemo: false,
-    updatedAt: Math.max(local.updatedAt, remote.updatedAt),
-    updatedBy: newer.updatedAt >= older.updatedAt ? newer.updatedBy : older.updatedBy,
-    updatedByName: newer.updatedAt >= older.updatedAt ? newer.updatedByName : older.updatedByName,
-  }
-}
-
 export function adoptSharedTrip(
   trips: Trip[],
   incoming: Trip,
@@ -215,16 +177,6 @@ export function adoptSharedTrip(
   }
 }
 
-export function tripFingerprint(trip: Trip): string {
-  return [
-    trip.updatedAt,
-    trip.name,
-    trip.people.map((p) => `${p.id}:${p.name}`).join(','),
-    trip.expenses.map((e) => `${e.id}:${e.updatedAt ?? e.createdAt}:${e.amount}`).join(','),
-    (trip.deletedExpenseIds ?? []).join(','),
-  ].join('|')
-}
-
 export function liveShareUrl(shareId: string, trip?: Trip): string {
   if (trip) return shareLinkForTrip(trip, shareId)
   const url = new URL(canonicalAppUrl())
@@ -243,12 +195,10 @@ export function setLiveShareHash(shareId: string, trip?: Trip): void {
   url.searchParams.delete('trip')
   url.searchParams.delete('import')
   url.hash = ''
+  url.searchParams.delete('s')
   if (trip) {
-    const snap = encodeTripShare(trip)
-    if (snap.length <= 1600) url.searchParams.set('s', snap)
-    else url.searchParams.delete('s')
-  } else {
-    url.searchParams.delete('s')
+    const header = encodeTripShare(compactTripHeader(trip))
+    if (header.length <= SNAP_QUERY_MAX) url.searchParams.set('s', header)
   }
   const next = `${url.pathname}${url.search}`
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {

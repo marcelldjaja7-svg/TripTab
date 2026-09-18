@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Expense, Trip } from '../types'
 import { defaultCategories } from './demo'
 import { encodeTripShare } from './share'
-import { adoptSharedTrip, mergeTrips, pullLiveTrip } from './sync'
+import { adoptSharedTrip, mergeTrips, pullLiveTrip, shouldPublishLive } from './sync'
 
 function trip(over: Partial<Trip> & Pick<Trip, 'people' | 'expenses'>): Trip {
   return {
@@ -124,6 +124,27 @@ describe('mergeTrips', () => {
     })
     const ids = mergeTrips(left, right).people.map((p) => p.id).sort()
     expect(ids).toEqual(['a', 'c'])
+  })
+
+  it('does not republish a poorer 12-bill copy over a 43-bill room', () => {
+    const a = 'a'
+    const bills = (n: number) =>
+      Array.from({ length: n }, (_, i) => expense({ id: `e${i}`, paidBy: a, amount: i + 1 }))
+    const stale = trip({
+      updatedAt: 90,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: bills(12),
+    })
+    const live = trip({
+      updatedAt: 40,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: bills(43),
+    })
+    expect(shouldPublishLive(stale, live)).toBe(false)
+    expect(shouldPublishLive({ ...stale, expenses: [...stale.expenses, expense({ id: 'new', paidBy: a })] }, live)).toBe(
+      true,
+    )
+    expect(shouldPublishLive(trip({ people: [{ id: a, name: 'A', color: '#000' }], expenses: [] }), null)).toBe(false)
   })
 })
 

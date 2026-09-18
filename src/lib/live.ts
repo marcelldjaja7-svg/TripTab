@@ -1,5 +1,6 @@
 import type { Trip } from '../types'
-import { decodeTripShare, encodeTripShare } from './share'
+import { mergeTrips } from './merge'
+import { compactTripHeader, decodeTripShare, encodeTripShare } from './share'
 import { normalizeTrip } from './storage'
 
 export const LIVE_RELAYS = [
@@ -16,6 +17,9 @@ const SNAPSHOT = 'https://bytebin.lucko.me'
 const CLIENT_KEY = 'triptab.client'
 const LIVE_CACHE = 'triptab.live.'
 export const PING_MAX = 4000
+const SNAP_CACHE_MS = 8000
+
+const snapshotCache = new Map<string, { at: number; trip: Trip | null }>()
 
 export type LivePing = {
   v: 1
@@ -216,31 +220,48 @@ export function recalledLiveTrip(shareId: string): Trip | null {
 }
 
 export async function readLiveSnapshot(bin: string): Promise<Trip | null> {
+  const hit = snapshotCache.get(bin)
+  if (hit && Date.now() - hit.at < SNAP_CACHE_MS) return hit.trip
   try {
     const res = await fetch(`${SNAPSHOT}/${encodeURIComponent(bin)}`, {
       method: 'GET',
       credentials: 'omit',
       headers: { Accept: 'application/json' },
     })
-    if (!res.ok) return null
-    return normalizeTrip(await res.json())
+    const trip = res.ok ? normalizeTrip(await res.json()) : null
+    snapshotCache.set(bin, { at: Date.now(), trip })
+    return trip
   } catch {
+    snapshotCache.set(bin, { at: Date.now(), trip: null })
     return null
+  }
+}
+
+function withLiveMeta(trip: Trip, shareId: string, ping: LivePing): Trip {
+  return {
+    ...trip,
+    shareId,
+    isDemo: false,
+    updatedByName: trip.updatedByName || ping.who,
   }
 }
 
 export async function tripFromPing(ping: LivePing, shareId: string): Promise<Trip | null> {
   const fromPayload = ping.p ? decodeTripShare(ping.p) : null
-  const fromBin = !fromPayload && ping.bin ? await readLiveSnapshot(ping.bin) : null
+  const fromBin = ping.bin ? await readLiveSnapshot(ping.bin) : null
+  if (fromPayload && fromBin) {
+    return withLiveMeta(mergeTrips(fromPayload, fromBin), shareId, ping)
+  }
   const trip = fromPayload ?? fromBin
   if (!trip) return null
-  return {
-    ...trip,
-    shareId,
-    isDemo: false,
-    updatedByName: ping.who || trip.updatedByName,
-    updatedAt: Math.max(trip.updatedAt, ping.at),
-  }
+  return withLiveMeta(trip, shareId, ping)
+}
+
+function clipPingForNtfy(full: LivePing, header: string): LivePing {
+  if (JSON.stringify(full).length <= PING_MAX) return full
+  const withHeader: LivePing = { ...full, p: header }
+  if (JSON.stringify(withHeader).length <= PING_MAX) return withHeader
+  return { ...full, p: undefined }
 }
 
 function pingFingerprint(trip: Trip): string {
@@ -261,24 +282,23 @@ async function postLivePing(relay: string, topic: string, body: string, ms: numb
 
 export async function publishLivePing(shareId: string, trip: Trip, bin?: string | null): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
+  const encoded = encodeTripShare(withId)
   const ping: LivePing = {
     v: 1,
     bin: bin || undefined,
+    p: encoded,
     fp: pingFingerprint(withId),
     at: Date.now(),
     by: liveClientId(),
     who: withId.updatedByName,
   }
-  const encoded = encodeTripShare(withId)
-  ping.p = encoded
   rememberLiveTrip(shareId, withId)
   try {
     channelFor(shareId)?.postMessage(ping)
   } catch {
     /* older browsers */
   }
-  const forNtfy: LivePing = encoded.length <= PING_MAX ? ping : { ...ping, p: undefined }
-  if (!forNtfy.p && !forNtfy.bin) forNtfy.p = encoded
+  const forNtfy = clipPingForNtfy(ping, encodeTripShare(compactTripHeader(withId)))
   const body = JSON.stringify(forNtfy)
   const topic = liveTopic(shareId)
   // ntfy.sh often hangs or 429s from this IP — do not block other phones on it.
@@ -330,11 +350,14 @@ export async function pollLivePings(
 
 export async function pullLatestLiveTrip(shareId: string): Promise<Trip | null> {
   const pings = await pollLivePings(shareId)
-  for (let i = pings.length - 1; i >= 0; i--) {
-    const trip = await tripFromPing(pings[i]!, shareId)
-    if (trip) return trip
+  let merged: Trip | null = recalledLiveTrip(shareId)
+  for (const ping of pings) {
+    const trip = await tripFromPing(ping, shareId)
+    if (!trip) continue
+    merged = merged ? mergeTrips(merged, trip) : trip
   }
-  return recalledLiveTrip(shareId)
+  if (merged) rememberLiveTrip(shareId, merged)
+  return merged
 }
 
 export function subscribeLivePings(shareId: string, onPing: (ping: LivePing) => void): () => void {

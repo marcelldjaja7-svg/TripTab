@@ -18,6 +18,7 @@ import {
   pullLiveTrip,
   pushLiveTrip,
   setLiveShareHash,
+  shouldPublishLive,
   tripFingerprint,
 } from './lib/sync'
 import { uid } from './lib/utils'
@@ -152,21 +153,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
-          // Push the local bills first so other phones see uploads without waiting
-          // on a pull that can hang on a dead ntfy.sh.
-          await pushLiveTrip(shareId, local)
-          setLiveShareHash(shareId, local)
+          // Pull every live copy first. A stale 12-bill phone must not overwrite 43 bills.
           const remote = await pullLatestLiveTrip(shareId)
           const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? local
-          if (!remote) return
-          const merged = mergeTrips(latest, remote)
-          if (tripFingerprint(merged) === tripFingerprint(latest)) return
-          await pushLiveTrip(shareId, merged)
-          setLiveShareHash(shareId, merged)
-          setData((prev) => ({
-            ...prev,
-            trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
-          }))
+          const merged = remote ? mergeTrips(latest, remote) : latest
+          if (tripFingerprint(merged) !== tripFingerprint(latest)) {
+            setLiveShareHash(shareId, merged)
+            setData((prev) => ({
+              ...prev,
+              trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
+            }))
+          }
+          if (shouldPublishLive(latest, remote)) {
+            await pushLiveTrip(shareId, merged)
+            setLiveShareHash(shareId, merged)
+          } else {
+            setLiveShareHash(shareId, merged)
+          }
         } catch {
           /* stay local if the room is briefly unreachable */
         }
@@ -404,7 +407,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const remote = await pullLatestLiveTrip(trip.shareId)
           const latest = dataRef.current.trips.find((t) => t.id === trip.id) ?? trip
           const merged = remote ? mergeTrips(latest, remote) : latest
-          await pushLiveTrip(trip.shareId, merged)
+          if (shouldPublishLive(latest, remote) || !remote) {
+            await pushLiveTrip(trip.shareId, merged)
+          }
           setLiveShareHash(trip.shareId, merged)
           setData((prev) => ({
             ...prev,
