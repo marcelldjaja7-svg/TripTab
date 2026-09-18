@@ -71,7 +71,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
   const dataRef = useRef(data)
   dataRef.current = data
-  const joining = useRef(false)
 
   useEffect(() => {
     saveAppData(data)
@@ -114,31 +113,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    joining.current = true
     void (async () => {
-      try {
-        const remote =
-          (await pullLatestLiveTrip(liveId)) ??
-          (await pullLiveTrip(liveId)) ??
-          (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 2500))
-        if (remote) {
-          setData((prev) => {
-            const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
-            saveAppData(next)
-            return next
-          })
-          setLiveShareHash(liveId, remote)
-          if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
-          return
-        }
-        if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
-          setLiveShareHash(liveId, snapshot ?? localMatch ?? undefined)
-          return
-        }
-        notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
-      } finally {
-        joining.current = false
+      const remote =
+        (await pullLatestLiveTrip(liveId)) ??
+        (await pullLiveTrip(liveId)) ??
+        (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 2500))
+      if (remote) {
+        setData((prev) => {
+          const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
+          saveAppData(next)
+          return next
+        })
+        setLiveShareHash(liveId, remote)
+        if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
+        return
       }
+      if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
+        setLiveShareHash(liveId, snapshot ?? localMatch ?? undefined)
+        return
+      }
+      notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
     })()
   }, [])
 
@@ -149,27 +143,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const trip = dataRef.current.trips.find((t) => t.id === dataRef.current.currentTripId)
-    if (!trip?.shareId || joining.current) return
+    if (!trip?.shareId) return
     const shareId = trip.shareId
+    const local = trip
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
+          // Push the local bills first so other phones see uploads without waiting
+          // on a pull that can hang on a dead ntfy.sh.
+          await pushLiveTrip(shareId, local)
+          setLiveShareHash(shareId, local)
           const remote = await pullLatestLiveTrip(shareId)
-          const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? trip
-          const merged = remote ? mergeTrips(latest, remote) : latest
+          const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? local
+          if (!remote) return
+          const merged = mergeTrips(latest, remote)
+          if (tripFingerprint(merged) === tripFingerprint(latest)) return
           await pushLiveTrip(shareId, merged)
           setLiveShareHash(shareId, merged)
-          if (tripFingerprint(merged) !== tripFingerprint(latest)) {
-            setData((prev) => ({
-              ...prev,
-              trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
-            }))
-          }
+          setData((prev) => ({
+            ...prev,
+            trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
+          }))
         } catch {
           /* stay local if the room is briefly unreachable */
         }
       })()
-    }, 80)
+    }, 50)
     return () => window.clearTimeout(handle)
   }, [liveSig])
 
@@ -201,17 +200,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     })
     const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      void pullLatestLiveTrip(shareId).then((remote) => {
+        if (remote) applyRemote(remote)
+      })
+    }
+    const onOnline = () => {
       void pullLatestLiveTrip(shareId).then((remote) => {
         if (remote) applyRemote(remote)
       })
     }
     document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('online', onOnline)
     void pullLatestLiveTrip(shareId).then((remote) => {
       if (remote) applyRemote(remote)
     })
     return () => {
       unsub()
       document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('online', onOnline)
     }
   }, [activeShareId])
 
