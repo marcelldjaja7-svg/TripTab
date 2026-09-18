@@ -178,14 +178,13 @@ function ensureTransport(shareId: string): void {
   }
 
   const poll = globalThis.setInterval(() => {
-    // Keep polling even when EventSource reports "open". ntfy.sh can sit in a
-    // zombie open state (429 / silent drop) and never deliver uploaded bills.
-    const relays = openCount > 0 ? FALLBACK_RELAYS : LIVE_RELAYS
-    void pollLivePings(shareId, relays).then((pings) => {
+    // Keep polling every relay even when EventSource reports "open". ntfy.sh can
+    // sit in a zombie open state and fallbacks still hold the uploaded bills.
+    void pollLivePings(shareId).then((pings) => {
       const last = pings.at(-1)
       if (last) emitPing(shareId, last)
     })
-  }, 3000)
+  }, 2500)
 
   transports.set(shareId, () => {
     stopped = true
