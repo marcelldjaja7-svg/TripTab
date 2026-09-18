@@ -540,6 +540,141 @@ describe('proportional shares', () => {
     expect(personTripShare(t, b)).toBeCloseTo(0)
   })
 
+  it('scales custom shares that do not add up to the bill', () => {
+    const a = 'a'
+    const b = 'b'
+    const t = trip({
+      people: [
+        { id: a, name: 'A', color: '#000' },
+        { id: b, name: 'B', color: '#111' },
+      ],
+      expenses: [
+        {
+          id: 'e1',
+          amount: 30,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'custom',
+          shares: { [a]: 10, [b]: 10 },
+          categoryId: 'food',
+          note: '',
+          date: '2026-09-01',
+          createdAt: 1,
+        },
+      ],
+    })
+    expect(personTripShare(t, a)).toBeCloseTo(15)
+    expect(personTripShare(t, b)).toBeCloseTo(15)
+  })
+
+  it('keeps have-paid in proportion to settle-up after the split', () => {
+    const a = 'a'
+    const b = 'b'
+    const t = trip({
+      people: [
+        { id: a, name: 'engdjaja', color: '#000' },
+        { id: b, name: 'nathanaelsp', color: '#111' },
+      ],
+      expenses: [
+        {
+          id: 'steam',
+          amount: 244,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'Steam',
+          date: '2026-09-17',
+          createdAt: 1,
+        },
+        {
+          id: 'muse',
+          amount: 180,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'equal',
+          categoryId: 'activities',
+          note: 'Design Museum',
+          date: '2026-09-17',
+          createdAt: 2,
+        },
+        {
+          id: 'tonkin',
+          amount: 376,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'custom',
+          shares: { [a]: 183, [b]: 193 },
+          categoryId: 'food',
+          note: 'District Tonkin',
+          date: '2026-09-17',
+          createdAt: 3,
+        },
+        {
+          id: 'amager',
+          amount: 320,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'equal',
+          categoryId: 'transport',
+          note: 'Amagerbro',
+          date: '2026-09-17',
+          createdAt: 4,
+        },
+        {
+          id: 'fabro',
+          amount: 430,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'Fabro',
+          date: '2026-09-16',
+          createdAt: 5,
+        },
+        {
+          id: 'water',
+          amount: 22,
+          currency: 'USD',
+          paidBy: b,
+          participantIds: [b],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'water',
+          date: '2026-09-17',
+          createdAt: 6,
+        },
+        {
+          id: 'pay',
+          amount: 658,
+          currency: 'USD',
+          paidBy: b,
+          participantIds: [a],
+          splitMode: 'equal',
+          categoryId: 'settlement',
+          note: 'Settle up',
+          date: '2026-09-18',
+          createdAt: 7,
+        },
+      ],
+    })
+    expect(personTripShare(t, a)).toBeCloseTo(892)
+    expect(personTripShare(t, b)).toBeCloseTo(680)
+    expect(personFunded(t, a)).toBeCloseTo(892)
+    expect(personFunded(t, b)).toBeCloseTo(680)
+    const spent = tripTotalBase(t)
+    expect(spent).toBeCloseTo(1572)
+    expect(shareOfTripPercent(892, spent)).toBeCloseTo((892 / 1572) * 100)
+    expect(shareOfTripPercent(680, spent)).toBeCloseTo((680 / 1572) * 100)
+    expect(shareOfTripPercent(personFunded(t, a), spent)).toBeCloseTo(shareOfTripPercent(personTripShare(t, a), spent))
+  })
+
   it('makes every person\'s share add up to trip spend', () => {
     const t = createDemoTrip()
     const spent = tripTotalBase(t)

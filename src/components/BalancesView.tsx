@@ -59,7 +59,7 @@ export function BalancesView({
           High Rollers
         </h2>
         <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">
-          Each friend's share of what they have to pay.
+          Each friend's share of what they have to pay, in proportion to the split.
         </p>
 
         {ranked.length === 0 ? (
@@ -93,7 +93,10 @@ export function BalancesView({
                       {formatMoney(row.amount, trip.baseCurrency)}
                     </p>
                     <p className="text-[11px] tabular-nums text-[#d4af37]/70">
-                      {formatSharePercent(row.amount, spent)} of spend
+                      {formatSharePercent(row.amount, spent)} of spend to pay
+                    </p>
+                    <p className="text-[11px] tabular-nums text-[#d4af37]/55">
+                      {formatSharePercent(row.funded, spent)} have paid
                     </p>
                   </div>
                 </li>
@@ -108,9 +111,9 @@ export function BalancesView({
 
       <SectionLabel>Each person's totals</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Share is this friend's portion of each bill (equal, custom, or percent) — what they have to
-        pay. Paid is cards they covered. After settle-up, share matches what they have paid toward
-        the trip.
+        To pay is this friend's proportion of each bill (equal, custom amounts, or percent). Have
+        paid is cards plus settle-up. After settle-up, the two amounts — and their % of spend —
+        match.
       </p>
       <Group>
         {computeBalances(trip).map((row) => {
@@ -122,11 +125,11 @@ export function BalancesView({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[17px] font-medium">{person.name}</p>
                 <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-                  To pay {formatMoney(row.share, trip.baseCurrency)}
+                  To pay {formatMoney(row.share, trip.baseCurrency)}{' '}
+                  ({formatSharePercent(row.share, spent)})
                   <span className="mx-1.5">·</span>
-                  {formatSharePercent(row.share, spent)}
-                  <span className="mx-1.5">·</span>
-                  Have paid {formatMoney(row.funded, trip.baseCurrency)}
+                  Have paid {formatMoney(row.funded, trip.baseCurrency)}{' '}
+                  ({formatSharePercent(row.funded, spent)})
                 </p>
               </div>
               <p

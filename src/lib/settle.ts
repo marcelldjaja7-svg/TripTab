@@ -1,10 +1,12 @@
 import type { Expense, PersonBalance, Transfer, Trip } from '../types'
 import { currencyDecimals } from './currencies'
 import {
-  equalShares,
+  allocateProportional,
   formatMoney,
   fromMinor,
   isSettlement,
+  participantIdsOf,
+  splitWeights,
   toBaseMinor,
 } from './money'
 import { uid } from './utils'
@@ -21,58 +23,9 @@ type MinorBalance = {
   net: number
 }
 
-function participantIdsOf(expense: Expense): string[] {
-  const ids = expense.participantIds.filter(Boolean)
-  if (ids.length > 0) return [...new Set(ids)]
-  return expense.paidBy ? [expense.paidBy] : []
-}
-
-/** Split `totalMinor` in proportion to `weights`. Last positive-weight person gets the remainder. */
-function allocateProportional(ids: string[], weights: Record<string, number>, totalMinor: number): Map<string, number> {
-  const out = new Map<string, number>()
-  if (ids.length === 0) return out
-  const positive = ids.map((id) => ({ id, w: Math.max(0, weights[id] ?? 0) }))
-  const weightSum = positive.reduce((sum, row) => sum + row.w, 0)
-  if (weightSum <= 0) {
-    const n = ids.length
-    const base = Math.floor(totalMinor / n)
-    let rem = totalMinor - base * n
-    ids.forEach((id, i) => out.set(id, base + (i < rem ? 1 : 0)))
-    return out
-  }
-  const remainderId = [...positive].reverse().find((row) => row.w > 0)?.id ?? ids[ids.length - 1]!
-  let allocated = 0
-  for (const id of ids) {
-    if (id === remainderId) continue
-    const minor = Math.round(((weights[id] ?? 0) / weightSum) * totalMinor)
-    out.set(id, minor)
-    allocated += minor
-  }
-  out.set(remainderId, totalMinor - allocated)
-  for (const id of ids) if (!out.has(id)) out.set(id, 0)
-  return out
-}
-
-function splitWeights(expense: Expense, ids: string[]): Record<string, number> {
-  if (expense.splitMode === 'percent' && expense.shares) {
-    const out: Record<string, number> = {}
-    for (const id of ids) out[id] = Math.max(0, expense.shares[id] ?? 0)
-    if (ids.some((id) => out[id]! > 0)) return out
-  }
-  if (expense.splitMode === 'custom' && expense.shares) {
-    const out: Record<string, number> = {}
-    for (const id of ids) out[id] = Math.max(0, expense.shares[id] ?? 0)
-    if (ids.some((id) => out[id]! > 0)) return out
-  }
-  const equal = equalShares(expense.amount, ids, expense.currency)
-  const out: Record<string, number> = {}
-  for (const id of ids) out[id] = equal[id] ?? 0
-  return out
-}
-
 /**
  * Each participant's portion of a bill, in base-currency minor units.
- * Equal = even split. Custom amounts and percents are taken as weights so each
+ * Equal = even weights. Custom amounts and percents are weights, so each
  * person is billed in proportion to what they have to pay on that bill.
  */
 export function expenseShareMinor(trip: Trip, expense: Expense): Map<string, number> {
