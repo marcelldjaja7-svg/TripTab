@@ -31,6 +31,8 @@ export type LivePing = {
   who?: string
   /** Total bills on the publisher's trip so peers keep pulling until they match. */
   n?: number
+  /** Expense ids in this ping so members can tell when a piece is still missing. */
+  ids?: string[]
 }
 
 export function liveClientId(): string {
@@ -92,6 +94,9 @@ export function parseLivePing(raw: unknown): LivePing | null {
       by: ping.by,
       who: typeof ping.who === 'string' && ping.who.trim() ? ping.who.trim() : undefined,
       n: typeof ping.n === 'number' && ping.n >= 0 ? ping.n : undefined,
+      ids: Array.isArray(ping.ids)
+        ? ping.ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : undefined,
     }
   } catch {
     return null
@@ -188,7 +193,10 @@ function ensureTransport(shareId: string): void {
     channel.onmessage = (event) => emitPing(shareId, event.data)
   }
 
+  void drainLiveQueue(shareId)
+
   const poll = globalThis.setInterval(() => {
+    void drainLiveQueue(shareId)
     void pullLatestLiveTrip(shareId).then((trip) => {
       if (trip) pullListeners.get(shareId)?.forEach((fn) => fn(trip))
     })
@@ -308,6 +316,7 @@ function chunkPing(trip: Trip, chunk: Trip, part: string): LivePing {
     by: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
     who: liveWho(trip) ?? 'friend',
     n: trip.expenses.length,
+    ids: chunk.expenses.map((expense) => expense.id),
   }
 }
 
@@ -355,16 +364,148 @@ export function chunkTripForLive(trip: Trip): Trip[] {
   return chunks.length > 0 ? chunks : [header]
 }
 
-async function postLivePing(relay: string, topic: string, body: string, ms: number): Promise<void> {
-  await fetchWithTimeout(
-    `${relay}/${topic}`,
-    {
-      method: 'POST',
-      body,
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    },
-    ms,
+async function postLivePing(relay: string, topic: string, body: string, ms: number): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(
+      `${relay}/${topic}`,
+      {
+        method: 'POST',
+        body,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      },
+      ms,
+    )
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+async function deliverLiveBody(topic: string, body: string): Promise<boolean> {
+  void postLivePing(PRIMARY_RELAY, topic, body, 2000)
+  const fallbacks = await Promise.all(
+    FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 800)),
   )
+  return fallbacks.some(Boolean)
+}
+
+type SyncJob = { body: string; tries: number }
+
+const QUEUE_KEY = 'triptab.syncq.'
+const outbound = new Map<string, { jobs: SyncJob[]; running: Promise<void> | null }>()
+
+function readPersistedQueue(shareId: string): SyncJob[] {
+  try {
+    const raw = localStorage.getItem(QUEUE_KEY + shareId)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((row) => {
+        if (!row || typeof row !== 'object') return null
+        const job = row as { body?: unknown; tries?: unknown }
+        if (typeof job.body !== 'string' || !job.body) return null
+        return { body: job.body, tries: typeof job.tries === 'number' && job.tries >= 0 ? job.tries : 0 }
+      })
+      .filter((job): job is SyncJob => Boolean(job))
+  } catch {
+    return []
+  }
+}
+
+function persistQueue(shareId: string, jobs: SyncJob[]): void {
+  try {
+    if (jobs.length === 0) localStorage.removeItem(QUEUE_KEY + shareId)
+    else localStorage.setItem(QUEUE_KEY + shareId, JSON.stringify(jobs))
+  } catch {
+    /* quota / private mode */
+  }
+}
+
+function queueFor(shareId: string): { jobs: SyncJob[]; running: Promise<void> | null } {
+  const existing = outbound.get(shareId)
+  if (existing) return existing
+  const created = { jobs: readPersistedQueue(shareId), running: null }
+  outbound.set(shareId, created)
+  return created
+}
+
+function enqueueLiveBodies(shareId: string, bodies: string[]): void {
+  const q = queueFor(shareId)
+  for (const body of bodies) q.jobs.push({ body, tries: 0 })
+  persistQueue(shareId, q.jobs)
+}
+
+async function drainJobs(shareId: string, q: { jobs: SyncJob[] }): Promise<void> {
+  const topic = liveTopic(shareId)
+  while (q.jobs.length > 0) {
+    const job = q.jobs[0]
+    let ok = false
+    try {
+      ok = await deliverLiveBody(topic, job.body)
+    } catch {
+      ok = false
+    }
+    if (ok) {
+      q.jobs.shift()
+      persistQueue(shareId, q.jobs)
+      continue
+    }
+    job.tries += 1
+    persistQueue(shareId, q.jobs)
+    const wait = Math.min(8000, 250 * Math.max(1, job.tries))
+    await new Promise((resolve) => globalThis.setTimeout(resolve, wait))
+  }
+}
+
+/** Send queued live pieces one at a time with retry so 429s do not drop bills. */
+export function drainLiveQueue(shareId: string): Promise<void> {
+  const q = queueFor(shareId)
+  if (q.running) return q.running
+  // Track the .then wrapper, not the inner async. An empty drain finishes
+  // synchronously; assigning that resolved promise would skip later jobs.
+  const run = drainJobs(shareId, q).then(
+    () => {
+      if (q.running === run) q.running = null
+      if (q.jobs.length > 0) return drainLiveQueue(shareId)
+    },
+    () => {
+      if (q.running === run) q.running = null
+      if (q.jobs.length > 0) return drainLiveQueue(shareId)
+    },
+  )
+  q.running = run
+  return run
+}
+
+function fitChunkPing(trip: Trip, chunk: Trip, part: string, by: string, who: string | undefined, at: number): LivePing {
+  const ping: LivePing = {
+    v: 1,
+    p: encodeTripShare(chunk),
+    fp: livePartFp(trip, part),
+    at,
+    by,
+    who,
+    n: trip.expenses.length,
+    ids: chunk.expenses.map((expense) => expense.id),
+  }
+  if (pingSize(ping) <= PING_MAX) return ping
+  const slimmer = packLiveChunk(
+    compactTripHeader(trip),
+    trip,
+    chunk.expenses.map((expense) => slimExpenseNote(expense, 24)),
+  )
+  ping.p = encodeTripShare(slimmer)
+  ping.ids = slimmer.expenses.map((expense) => expense.id)
+  if (pingSize(ping) <= PING_MAX) return ping
+  const bare = packLiveChunk(
+    compactTripHeader(trip),
+    trip,
+    chunk.expenses.map((expense) => slimExpenseNote(expense, 0)),
+  )
+  ping.p = encodeTripShare(bare)
+  ping.ids = bare.expenses.map((expense) => expense.id)
+  return ping
 }
 
 export async function publishLivePing(shareId: string, trip: Trip, bin?: string | null): Promise<void> {
@@ -379,6 +520,7 @@ export async function publishLivePing(shareId: string, trip: Trip, bin?: string 
     by: liveClientId(),
     who: liveWho(withId),
     n: withId.expenses.length,
+    ids: withId.expenses.map((expense) => expense.id),
   }
   try {
     channelFor(shareId)?.postMessage(full)
@@ -387,7 +529,6 @@ export async function publishLivePing(shareId: string, trip: Trip, bin?: string 
   }
 
   const chunks = chunkTripForLive(withId)
-  const topic = liveTopic(shareId)
   const bodies: string[] = []
   if (bin) {
     const binPing: LivePing = {
@@ -402,36 +543,14 @@ export async function publishLivePing(shareId: string, trip: Trip, bin?: string 
     bodies.push(JSON.stringify(binPing))
   }
   for (const [i, chunk] of chunks.entries()) {
-    const ping: LivePing = {
-      v: 1,
-      p: encodeTripShare(chunk),
-      fp: livePartFp(withId, `${i}/${chunks.length}`),
-      at: full.at,
-      by: full.by,
-      who: full.who,
-      n: withId.expenses.length,
-    }
-    if (pingSize(ping) > PING_MAX) {
-      const slimmer = packLiveChunk(
-        compactTripHeader(withId),
-        withId,
-        chunk.expenses.map((expense) => slimExpenseNote(expense, 24)),
-      )
-      ping.p = encodeTripShare(slimmer)
-    }
-    if (pingSize(ping) > PING_MAX) continue
+    const ping = fitChunkPing(withId, chunk, `${i}/${chunks.length}`, full.by, full.who, full.at)
     bodies.push(JSON.stringify(ping))
   }
 
-  const sendAll = Promise.all(
-    bodies.map(async (body) => {
-      void postLivePing(PRIMARY_RELAY, topic, body, 2000)
-      await Promise.allSettled(FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 900)))
-    }),
-  )
+  enqueueLiveBodies(shareId, bodies)
   await Promise.race([
-    sendAll,
-    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1200)),
+    drainLiveQueue(shareId),
+    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1500)),
   ])
 }
 
@@ -478,7 +597,13 @@ export async function pullLiveRoom(
   shareId: string,
 ): Promise<{ trip: Trip | null; expected: number }> {
   const pings = await pollLivePings(shareId)
-  const expected = pings.reduce((max, ping) => Math.max(max, ping.n ?? 0), 0)
+  const advertised = new Set<string>()
+  let expected = 0
+  for (const ping of pings) {
+    expected = Math.max(expected, ping.n ?? 0)
+    for (const id of ping.ids ?? []) advertised.add(id)
+  }
+  expected = Math.max(expected, advertised.size)
   let merged: Trip | null = recalledLiveTrip(shareId)
   for (const ping of pings) {
     const trip = await tripFromPing(ping, shareId)
