@@ -9,6 +9,7 @@ import {
   sharesMatchTotal,
   sharesSum,
 } from '../lib/money'
+import { parseExpenseDate } from '../lib/dates'
 import type { ReceiptScan } from '../lib/receipt'
 import { cn, todayISO, uid } from '../lib/utils'
 import type { Expense, SplitMode, Trip } from '../types'
@@ -56,7 +57,7 @@ export function ExpenseForm({ trip, expense, open, onClose, onSave, onDelete }: 
     expense?.categoryId ?? trip.categories.find((c) => c.id !== 'settlement')?.id ?? trip.categories[0]?.id,
   )
   const [note, setNote] = useState(expense?.note ?? '')
-  const [date, setDate] = useState(expense?.date || todayISO())
+  const [date, setDate] = useState(parseExpenseDate(expense?.date) || expense?.date || todayISO())
   const [rateDraft, setRateDraft] = useState(() => {
     const r = trip.rates[expense?.currency ?? trip.baseCurrency]
     return r ? String(roundTo(r, 8)) : '1'
@@ -138,7 +139,7 @@ export function ExpenseForm({ trip, expense, open, onClose, onSave, onDelete }: 
       setRateDraft(existing ? String(roundTo(existing, 8)) : '1')
     }
     if (scan.note) setNote(scan.note)
-    if (scan.date) setDate(scan.date)
+    if (scan.date) setDate(parseExpenseDate(scan.date) || scan.date)
     if (scan.categoryId) setCategoryId(scan.categoryId)
     setScanLines(scan.lineItems ?? [])
     setError('')
@@ -180,7 +181,7 @@ export function ExpenseForm({ trip, expense, open, onClose, onSave, onDelete }: 
       shares: splitMode === 'custom' ? parsedAmounts : splitMode === 'percent' ? parsedPercents : undefined,
       categoryId,
       note: note.trim(),
-      date,
+      date: parseExpenseDate(date) || date,
       createdAt: expense?.createdAt ?? Date.now(),
     }
     onSave(next, currency === trip.baseCurrency ? undefined : { currency, rate })
@@ -223,7 +224,7 @@ export function ExpenseForm({ trip, expense, open, onClose, onSave, onDelete }: 
               <TextInput
                 className="rounded-none bg-transparent px-0 py-0 text-right dark:bg-transparent"
                 type="date"
-                value={date}
+                value={parseExpenseDate(date) || ''}
                 onChange={(e) => setDate(e.target.value)}
               />
             </GroupRow>

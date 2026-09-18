@@ -1,5 +1,6 @@
 import { ArrowLeft, Plus, Receipt, Scale, Settings2, Share } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { formatExpenseDate, parseExpenseDate } from '../lib/dates'
 import { EMPTY_FILTER, filterExpenses, isFilterActive, type ExpenseFilter } from '../lib/filter'
 import { convertedLabel, formatMoney, isSettlement, splitLabel, tripTotalBase } from '../lib/money'
 import { cn } from '../lib/utils'
@@ -45,9 +46,13 @@ export function TripPage({ trip }: { trip: Trip }) {
 
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>()
-    const sorted = [...visibleExpenses].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt)
+    const sorted = [...visibleExpenses].sort(
+      (a, b) =>
+        (parseExpenseDate(b.date) || b.date || '').localeCompare(parseExpenseDate(a.date) || a.date || '') ||
+        b.createdAt - a.createdAt,
+    )
     for (const e of sorted) {
-      const key = e.date || 'Undated'
+      const key = parseExpenseDate(e.date) || e.date || 'Undated'
       const list = map.get(key) ?? []
       list.push(e)
       map.set(key, list)
@@ -169,7 +174,7 @@ export function TripPage({ trip }: { trip: Trip }) {
             ) : (
               grouped.map(([date, items]) => (
                 <section key={date}>
-                  <SectionLabel>{prettyDate(date)}</SectionLabel>
+                  <SectionLabel>{formatExpenseDate(date)}</SectionLabel>
                   <Group>
                     {items.map((expense) => {
                       const payer = peopleById.get(expense.paidBy)
@@ -313,10 +318,4 @@ function TabBtn({
       {label}
     </button>
   )
-}
-
-function prettyDate(iso: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso
-  const d = new Date(`${iso}T12:00:00`)
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }

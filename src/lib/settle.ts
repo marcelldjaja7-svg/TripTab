@@ -2,6 +2,7 @@ import type { Expense, PersonBalance, Transfer, Trip } from '../types'
 import { currencyDecimals } from './currencies'
 import { expenseShares, fromMinor, toBaseMinor } from './money'
 import { uid } from './utils'
+import { todayISO } from './dates'
 
 const EPS = 1
 
@@ -132,7 +133,7 @@ export function settlementExpense(
     splitMode: 'equal',
     categoryId: settlement.id,
     note: 'Settle up',
-    date: new Date().toISOString().slice(0, 10),
+    date: todayISO(),
     createdAt: Date.now(),
   }
 }
