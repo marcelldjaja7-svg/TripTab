@@ -212,7 +212,7 @@ export function normalizeReceiptScan(
   const amount = parseAmountValue(raw.amount ?? raw.total ?? raw.grandTotal, currency)
   const merchant = typeof raw.merchant === 'string' ? raw.merchant.trim() : typeof raw.vendor === 'string' ? raw.vendor.trim() : ''
   const noteRaw = typeof raw.note === 'string' ? raw.note.trim() : typeof raw.title === 'string' ? raw.title.trim() : ''
-  const note = (noteRaw || merchant).slice(0, 80)
+  const note = (noteRaw || merchant).slice(0, 240)
   const date = parseScanDate(raw.date ?? raw.issuedAt ?? raw.receiptDate)
   const categoryId = guessCategoryId(`${merchant} ${note} ${String(raw.category ?? '')}`, opts.categories, typeof raw.category === 'string' ? raw.category : typeof raw.categoryId === 'string' ? raw.categoryId : undefined)
   const lineItems = Array.isArray(raw.lineItems)
@@ -223,15 +223,14 @@ export function normalizeReceiptScan(
           const name = typeof row.name === 'string' ? row.name.trim() : typeof row.description === 'string' ? row.description.trim() : ''
           const lineAmount = parseAmountValue(row.amount ?? row.total, currency)
           if (!name || lineAmount === undefined) return null
-          return { name: name.slice(0, 60), amount: lineAmount }
+          return { name: name.slice(0, 120), amount: lineAmount }
         })
         .filter((x): x is ReceiptLine => Boolean(x))
-        .slice(0, 8)
     : undefined
   const scan: ReceiptScan = {}
   if (amount !== undefined) scan.amount = amount
   if (currency) scan.currency = currency
-  if (merchant) scan.merchant = merchant.slice(0, 60)
+  if (merchant) scan.merchant = merchant.slice(0, 120)
   if (note) scan.note = note
   if (date) scan.date = date
   if (categoryId) scan.categoryId = categoryId
@@ -269,7 +268,7 @@ Rules:
 - date is the receipt date if clearly visible, else null.
 - category must be one of: ${cats}
 - note should be a short human label (merchant or what was bought).
-- lineItems optional, max 8, skip if unclear.
+- lineItems: every distinct product/service line on the bill, in order. Do not cap or skip lines because there are many. Skip only blank or unreadable rows. Tax/service/total rows can be omitted if a grand total is already in amount.
 If this is not a receipt, still guess amount if any total is visible; otherwise nulls.`
 }
 
@@ -277,7 +276,7 @@ export async function fileToInlineImage(file: File): Promise<{ mime: string; dat
   const previewUrl = URL.createObjectURL(file)
   try {
     const bitmap = await createImageBitmap(file)
-    const max = 1600
+    const max = 2400
     const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height))
     const w = Math.max(1, Math.round(bitmap.width * scale))
     const h = Math.max(1, Math.round(bitmap.height * scale))
@@ -367,7 +366,11 @@ async function generateGeminiJson(
           parts: [{ text: prompt }, { inlineData: { mimeType: mime, data } }],
         },
       ],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: 'application/json',
+        maxOutputTokens: 8192,
+      },
     }),
   })
   if (res.status === 400 || res.status === 403 || res.status === 401) {

@@ -75,6 +75,22 @@ describe('mergeTrips', () => {
     expect(mergeTrips(local, remote).expenses).toHaveLength(0)
   })
 
+  it('keeps an uploaded bill on the older trip when the other phone is newer', () => {
+    const a = 'a'
+    const local = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'scan-17', paidBy: a, amount: 88, date: '2026-09-17', updatedAt: 10 })],
+    })
+    const remote = trip({
+      updatedAt: 50,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'coffee', paidBy: a, amount: 4, updatedAt: 50 })],
+    })
+    const ids = mergeTrips(local, remote).expenses.map((e) => e.id).sort()
+    expect(ids).toEqual(['coffee', 'scan-17'])
+  })
+
   it('keeps people added on two devices', () => {
     const left = trip({
       updatedAt: 5,
@@ -181,5 +197,44 @@ describe('live room payload', () => {
     await pushLiveTrip(id, { ...sample, shareId: id, expenses: [expense({ id: 'e-live', paidBy: 'a' })] })
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
     expect(urls.some((url) => url.includes('ntfy'))).toBe(true)
+  })
+
+  it('stores a full snapshot before pinging so a trip can hold any number of bills', async () => {
+    const fat = trip({
+      name: 'Huge scan dump',
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: Array.from({ length: 40 }, (_, i) =>
+        expense({
+          id: `scan-${i}`,
+          paidBy: 'a',
+          amount: 10 + i,
+          note: `Uploaded receipt ${i} ${'x'.repeat(80)}`,
+        }),
+      ),
+    })
+    const order: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.includes('lucko.me/post') && method === 'POST') {
+        order.push('bytebin')
+        return new Response(JSON.stringify({ key: 'bin-huge' }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.includes('ntfy') && method === 'POST') {
+        order.push('ntfy')
+        const body = String(init?.body ?? '')
+        expect(body).toContain('bin-huge')
+        return new Response('{}', { status: 200 })
+      }
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { pushLiveTrip } = await import('./sync')
+    await pushLiveTrip('tthuge', fat)
+    expect(order[0]).toBe('bytebin')
+    expect(order).toContain('ntfy')
   })
 })

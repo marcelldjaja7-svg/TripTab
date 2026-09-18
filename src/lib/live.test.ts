@@ -107,6 +107,67 @@ describe('live channel', () => {
     expect(pings[0]?.by).toBe('friend')
   })
 
+  it('still delivers a later snapshot ping after an empty fingerprint ping', async () => {
+    class FakeSource {
+      static CLOSED = 2
+      onmessage: ((event: { data: string }) => void) | null = null
+      onerror: (() => void) | null = null
+      onopen: (() => void) | null = null
+      readyState = 1
+      constructor() {
+        FakeSource.current = this
+      }
+      static current: FakeSource | null = null
+      close() {
+        this.readyState = 2
+      }
+    }
+    vi.stubGlobal('EventSource', FakeSource)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })))
+    const seen: Array<{ fp: string; bin?: string; p?: string }> = []
+    const unsub = subscribeLivePings('tt-bin-followup', (ping) => {
+      seen.push({ fp: ping.fp, bin: ping.bin, p: ping.p })
+    })
+    FakeSource.current?.onopen?.()
+    FakeSource.current?.onmessage?.({
+      data: JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: 'upload-1', at: 1, by: 'friend' }),
+      }),
+    })
+    FakeSource.current?.onmessage?.({
+      data: JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: 'upload-1', at: 2, by: 'friend', bin: 'snap-uploaded' }),
+      }),
+    })
+    expect(seen).toEqual([{ fp: 'upload-1', bin: 'snap-uploaded', p: undefined }])
+    unsub()
+  })
+
+  it('does not wait for a hung ntfy.sh before finishing a live publish', async () => {
+    let resolveHang: (() => void) | undefined
+    const hang = new Promise<void>((resolve) => {
+      resolveHang = resolve
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('ntfy.sh')) {
+        await hang
+        return new Response('ok', { status: 200 })
+      }
+      if (url.includes('ntfy')) return new Response('ok', { status: 200 })
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const start = Date.now()
+    const { publishLivePing } = await import('./live')
+    await publishLivePing('tt-hang-room', sample)
+    expect(Date.now() - start).toBeLessThan(1500)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('adminforge'))).toBe(true)
+    resolveHang?.()
+  })
+
   it('delivers an ntfy SSE envelope to subscribers', async () => {
     const encoded = encodeTripShare(sample)
     const opened: string[] = []

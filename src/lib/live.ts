@@ -8,10 +8,14 @@ export const LIVE_RELAYS = [
   'https://ntfy.envs.net',
 ] as const
 
+/** ntfy.sh is often rate-limited from shared IPs; fallbacks carry live bills. */
+const PRIMARY_RELAY = LIVE_RELAYS[0]
+const FALLBACK_RELAYS = LIVE_RELAYS.slice(1)
+
 const SNAPSHOT = 'https://bytebin.lucko.me'
 const CLIENT_KEY = 'triptab.client'
 const LIVE_CACHE = 'triptab.live.'
-const PING_MAX = 4000
+export const PING_MAX = 4000
 
 export type LivePing = {
   v: 1
@@ -91,21 +95,38 @@ function ntfyMessage(json: unknown): LivePing | null {
   return parseLivePing(typeof row.message === 'string' ? row.message : json)
 }
 
+function pingApplyKey(ping: LivePing): string {
+  return `${ping.fp}:${ping.p ? 'p' : ''}:${ping.bin ?? ''}`
+}
+
 function emitPing(shareId: string, raw: unknown): void {
   const ping = parseLivePing(raw) ?? ntfyMessage(raw)
   if (!ping || ping.by === liveClientId()) return
-  if (lastFp.get(shareId) === ping.fp) return
-  lastFp.set(shareId, ping.fp)
+  // A first oversized ping may have no payload yet. Do not remember its
+  // fingerprint or the later bytebin ping with the uploaded bills is dropped.
+  if (!ping.p && !ping.bin) return
+  const key = pingApplyKey(ping)
+  if (lastFp.get(shareId) === key) return
+  lastFp.set(shareId, key)
   listeners.get(shareId)?.forEach((fn) => fn(ping))
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms = 4000): Promise<Response> {
   const controller = new AbortController()
-  const timer = globalThis.setTimeout(() => controller.abort(), ms)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = globalThis.setTimeout(() => {
+      controller.abort()
+      reject(new DOMException('Timeout', 'AbortError'))
+    }, ms)
+  })
   try {
-    return await fetch(url, { ...init, signal: controller.signal, credentials: 'omit' })
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal, credentials: 'omit' }),
+      timeout,
+    ])
   } finally {
-    globalThis.clearTimeout(timer)
+    if (timer !== undefined) globalThis.clearTimeout(timer)
   }
 }
 
@@ -157,12 +178,13 @@ function ensureTransport(shareId: string): void {
   }
 
   const poll = globalThis.setInterval(() => {
-    if (openCount > 0) return
+    // Keep polling every relay even when EventSource reports "open". ntfy.sh can
+    // sit in a zombie open state and fallbacks still hold the uploaded bills.
     void pollLivePings(shareId).then((pings) => {
       const last = pings.at(-1)
       if (last) emitPing(shareId, last)
     })
-  }, 8000)
+  }, 2500)
 
   transports.set(shareId, () => {
     stopped = true
@@ -216,6 +238,18 @@ function pingFingerprint(trip: Trip): string {
   return `${trip.updatedAt}:${trip.expenses.map((e) => `${e.id}:${e.updatedAt ?? e.createdAt}:${e.amount}`).join(',')}:${trip.people.length}`
 }
 
+async function postLivePing(relay: string, topic: string, body: string, ms: number): Promise<void> {
+  await fetchWithTimeout(
+    `${relay}/${topic}`,
+    {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    },
+    ms,
+  )
+}
+
 export async function publishLivePing(shareId: string, trip: Trip, bin?: string | null): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
   const ping: LivePing = {
@@ -237,27 +271,24 @@ export async function publishLivePing(shareId: string, trip: Trip, bin?: string 
   if (!forNtfy.p && !forNtfy.bin) forNtfy.p = encoded
   const body = JSON.stringify(forNtfy)
   const topic = liveTopic(shareId)
-  await Promise.allSettled(
-    LIVE_RELAYS.map((relay) =>
-      fetchWithTimeout(
-        `${relay}/${topic}`,
-        {
-          method: 'POST',
-          body,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        },
-        2000,
-      ),
-    ),
-  )
+  // ntfy.sh often hangs or 429s from this IP — do not block other phones on it.
+  void postLivePing(PRIMARY_RELAY, topic, body, 2000)
+  await Promise.race([
+    Promise.allSettled(FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 1200))),
+    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1300)),
+  ])
 }
 
-export async function pollLivePings(shareId: string): Promise<LivePing[]> {
+export async function pollLivePings(
+  shareId: string,
+  relays: readonly string[] = LIVE_RELAYS,
+): Promise<LivePing[]> {
   const topic = liveTopic(shareId)
   const rows = await Promise.all(
-    LIVE_RELAYS.map(async (relay) => {
+    relays.map(async (relay) => {
       try {
-        const res = await fetchWithTimeout(`${relay}/${topic}/json?poll=1&since=all`, { method: 'GET' }, 2000)
+        const ms = relay === PRIMARY_RELAY ? 800 : 1500
+        const res = await fetchWithTimeout(`${relay}/${topic}/json?poll=1&since=all`, { method: 'GET' }, ms)
         if (!res.ok) return [] as LivePing[]
         const text = await res.text()
         const pings: LivePing[] = []
@@ -265,7 +296,7 @@ export async function pollLivePings(shareId: string): Promise<LivePing[]> {
           if (!line.trim()) continue
           try {
             const ping = ntfyMessage(JSON.parse(line) as unknown)
-            if (ping) pings.push(ping)
+            if (ping && (ping.p || ping.bin)) pings.push(ping)
           } catch {
             /* skip bad line */
           }

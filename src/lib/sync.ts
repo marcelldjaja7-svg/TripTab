@@ -6,7 +6,7 @@ import {
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
-import { publishLivePing } from './live'
+import { PING_MAX, publishLivePing } from './live'
 import { normalizeTrip } from './storage'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
@@ -33,17 +33,20 @@ async function request(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): 
 }
 
 async function postSnapshot(trip: Trip): Promise<string | null> {
-  try {
-    const res = await request(`${SNAPSHOT}/post`, {
-      method: 'POST',
-      body: JSON.stringify({ ...trip, isDemo: false }),
-    })
-    if (!res.ok) return null
-    const json = (await res.json()) as { key?: string }
-    return json.key && json.key.length > 3 ? json.key : null
-  } catch {
-    return null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await request(`${SNAPSHOT}/post`, {
+        method: 'POST',
+        body: JSON.stringify({ ...trip, isDemo: false }),
+      })
+      if (!res.ok) continue
+      const json = (await res.json()) as { key?: string }
+      if (json.key && json.key.length > 3) return json.key
+    } catch {
+      /* retry — live trips must not be capped by a single failed snapshot */
+    }
   }
+  return null
 }
 
 async function readSnapshot(bin: string): Promise<Trip | null> {
@@ -88,12 +91,19 @@ function roomPayload(json: RoomBody): { payload?: string; bin?: string; trip?: T
   }
 }
 
+export function mintLiveShareId(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? `tt${crypto.randomUUID().replace(/-/g, '')}`
+    : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+}
+
 export async function createLiveRoom(trip: Trip): Promise<string> {
-  const shareId =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? `tt${crypto.randomUUID().replace(/-/g, '')}`
-      : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
-  await pushLiveTrip(shareId, { ...trip, shareId, isDemo: false })
+  const shareId = mintLiveShareId()
+  try {
+    await pushLiveTrip(shareId, { ...trip, shareId, isDemo: false })
+  } catch {
+    /* later saves retry; the room id is still valid */
+  }
   return shareId
 }
 
@@ -116,10 +126,14 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
-  await publishLivePing(shareId, withId)
-  void postSnapshot(withId).then((bin) => {
-    if (bin) void publishLivePing(shareId, withId, bin)
-  })
+  const encoded = encodeTripShare(withId)
+  const bin = await postSnapshot(withId)
+  if (encoded.length > PING_MAX && !bin) {
+    const retry = await postSnapshot(withId)
+    await publishLivePing(shareId, withId, retry)
+    return
+  }
+  await publishLivePing(shareId, withId, bin)
 }
 
 export async function ensureLiveRoom(trip: Trip): Promise<string> {
@@ -139,8 +153,8 @@ export function mergeTrips(local: Trip, remote: Trip): Trip {
   const older = newer === local ? remote : local
   const deleted = new Set([...(local.deletedExpenseIds ?? []), ...(remote.deletedExpenseIds ?? [])])
 
-  const expenses = byId(older.expenses)
-  for (const expense of newer.expenses) {
+  const expenses = byId(local.expenses)
+  for (const expense of remote.expenses) {
     const prev = expenses.get(expense.id)
     if (!prev) {
       expenses.set(expense.id, expense)

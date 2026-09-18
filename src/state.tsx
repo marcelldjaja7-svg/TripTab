@@ -13,7 +13,7 @@ import {
 import {
   adoptSharedTrip,
   clearLiveShareLocation,
-  ensureLiveRoom,
+  mintLiveShareId,
   mergeTrips,
   pullLiveTrip,
   pushLiveTrip,
@@ -71,7 +71,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
   const dataRef = useRef(data)
   dataRef.current = data
-  const joining = useRef(false)
 
   useEffect(() => {
     saveAppData(data)
@@ -114,31 +113,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    joining.current = true
     void (async () => {
-      try {
-        const remote =
-          (await pullLatestLiveTrip(liveId)) ??
-          (await pullLiveTrip(liveId)) ??
-          (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 2500))
-        if (remote) {
-          setData((prev) => {
-            const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
-            saveAppData(next)
-            return next
-          })
-          setLiveShareHash(liveId, remote)
-          if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
-          return
-        }
-        if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
-          setLiveShareHash(liveId, snapshot ?? localMatch ?? undefined)
-          return
-        }
-        notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
-      } finally {
-        joining.current = false
+      const remote =
+        (await pullLatestLiveTrip(liveId)) ??
+        (await pullLiveTrip(liveId)) ??
+        (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 2500))
+      if (remote) {
+        setData((prev) => {
+          const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
+          saveAppData(next)
+          return next
+        })
+        setLiveShareHash(liveId, remote)
+        if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
+        return
       }
+      if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
+        setLiveShareHash(liveId, snapshot ?? localMatch ?? undefined)
+        return
+      }
+      notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
     })()
   }, [])
 
@@ -149,27 +143,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const trip = dataRef.current.trips.find((t) => t.id === dataRef.current.currentTripId)
-    if (!trip?.shareId || joining.current) return
+    if (!trip?.shareId) return
     const shareId = trip.shareId
+    const local = trip
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
+          // Push the local bills first so other phones see uploads without waiting
+          // on a pull that can hang on a dead ntfy.sh.
+          await pushLiveTrip(shareId, local)
+          setLiveShareHash(shareId, local)
           const remote = await pullLatestLiveTrip(shareId)
-          const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? trip
-          const merged = remote ? mergeTrips(latest, remote) : latest
+          const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? local
+          if (!remote) return
+          const merged = mergeTrips(latest, remote)
+          if (tripFingerprint(merged) === tripFingerprint(latest)) return
           await pushLiveTrip(shareId, merged)
           setLiveShareHash(shareId, merged)
-          if (tripFingerprint(merged) !== tripFingerprint(latest)) {
-            setData((prev) => ({
-              ...prev,
-              trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
-            }))
-          }
+          setData((prev) => ({
+            ...prev,
+            trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
+          }))
         } catch {
           /* stay local if the room is briefly unreachable */
         }
       })()
-    }, 80)
+    }, 50)
     return () => window.clearTimeout(handle)
   }, [liveSig])
 
@@ -201,17 +200,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     })
     const onVis = () => {
+      if (document.visibilityState !== 'visible') return
+      void pullLatestLiveTrip(shareId).then((remote) => {
+        if (remote) applyRemote(remote)
+      })
+    }
+    const onOnline = () => {
       void pullLatestLiveTrip(shareId).then((remote) => {
         if (remote) applyRemote(remote)
       })
     }
     document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('online', onOnline)
     void pullLatestLiveTrip(shareId).then((remote) => {
       if (remote) applyRemote(remote)
     })
     return () => {
       unsub()
       document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('online', onOnline)
     }
   }, [activeShareId])
 
@@ -330,35 +337,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resetAll: () => setData(defaultAppData()),
       notify,
       shareWithFriends: async (trip) => {
-        let shareId = trip.shareId
+        const shareId = trip.shareId || mintLiveShareId()
+        const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
+        setData((d) => ({
+          ...d,
+          trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
+        }))
+        setLiveRoomId(shareId)
+        setLiveShareHash(shareId, next)
         let live = false
         try {
-          shareId = await ensureLiveRoom(trip)
+          await pushLiveTrip(shareId, next)
           live = true
-          const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
-          setData((d) => ({
-            ...d,
-            trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
-          }))
-          setLiveRoomId(shareId)
-          setLiveShareHash(shareId, next)
         } catch {
-          /* snapshot in the link still opens the trip */
+          /* snapshot in the link still opens the trip; later saves retry */
         }
-        const url = shareLinkForTrip({ ...trip, shareId }, shareId)
+        const url = shareLinkForTrip(next, shareId)
         try {
-          await navigator.clipboard.writeText(url)
+          await Promise.race([
+            navigator.clipboard.writeText(url),
+            new Promise((_, reject) => window.setTimeout(() => reject(new Error('clipboard')), 400)),
+          ])
         } catch {
           /* share sheet below may still work */
         }
         const mobile = typeof navigator !== 'undefined' && /iPhone|iPad|Android/i.test(navigator.userAgent)
         try {
           if (mobile && navigator.share) {
-            await navigator.share({
-              title: trip.name,
-              text: 'Open this TripTab link to add expenses with the group.',
-              url,
-            })
+            await Promise.race([
+              navigator.share({
+                title: trip.name,
+                text: 'Open this TripTab link to add expenses with the group.',
+                url,
+              }),
+              new Promise((_, reject) => window.setTimeout(() => reject(new Error('share')), 1500)),
+            ])
           }
         } catch {
           try {
