@@ -115,6 +115,22 @@ describe('excel import', () => {
     expect(result.trip.expenses[0]?.paidBy).toBe('b')
   })
 
+  it('imports custom share amounts so settle totals stay unequal', async () => {
+    const filled = workbookXlsx([
+      {
+        name: 'Expenses',
+        rows: [
+          ['Date', 'Note', 'Amount', 'Currency', 'Paid by', 'Split between', 'Category', 'Split', 'Shares'],
+          ['2026-09-17', 'District Tonki', 376, 'IDR', 'Alex', 'Alex, Sam', 'Food', 'custom', 'Alex 200, Sam 176'],
+        ],
+      },
+    ])
+    const result = await importTripExcel({ ...trip(), expenses: [] }, filled)
+    const bill = result.trip.expenses[0]
+    expect(bill?.splitMode).toBe('custom')
+    expect(bill?.shares).toEqual({ a: 200, b: 176 })
+  })
+
   it('maps excel serial dates', () => {
     const serial = (Date.UTC(2026, 8, 18) - Date.UTC(1899, 11, 30)) / 86400000
     expect(excelSerialToIso(serial)).toBe('2026-09-18')

@@ -105,6 +105,11 @@ describe('computeBalances', () => {
     const nets = Object.fromEntries(computeBalances(t).map((x) => [x.personId, x.net]))
     expect(nets[a]).toBeCloseTo(60)
     expect(nets[b]).toBeCloseTo(-60)
+    const rows = Object.fromEntries(computeBalances(t).map((x) => [x.personId, x]))
+    expect(rows[a]?.paid).toBeCloseTo(90)
+    expect(rows[a]?.share).toBeCloseTo(30)
+    expect(rows[b]?.paid).toBeCloseTo(0)
+    expect(rows[b]?.share).toBeCloseTo(60)
   })
 
   it('honors percent shares and exclusions', () => {
@@ -137,6 +142,91 @@ describe('computeBalances', () => {
     expect(nets[a]).toBeCloseTo(30)
     expect(nets[b]).toBeCloseTo(-30)
     expect(nets[c]).toBeCloseTo(0)
+  })
+
+  it('does not bill a friend for a personal equal expense', () => {
+    const a = 'a'
+    const b = 'b'
+    const t = trip({
+      people: [
+        { id: a, name: 'engdjaja', color: '#000' },
+        { id: b, name: 'nathanaelsp', color: '#111' },
+      ],
+      expenses: [
+        {
+          id: 'steam',
+          amount: 244,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'Steam',
+          date: '2026-09-17',
+          createdAt: 1,
+        },
+        {
+          id: 'muse',
+          amount: 180,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'equal',
+          categoryId: 'activities',
+          note: 'Design Muse',
+          date: '2026-09-17',
+          createdAt: 2,
+        },
+        {
+          id: 'tonki',
+          amount: 376,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'custom',
+          shares: { [a]: 200, [b]: 176 },
+          categoryId: 'food',
+          note: 'District Tonki',
+          date: '2026-09-17',
+          createdAt: 3,
+        },
+      ],
+    })
+    const rows = Object.fromEntries(computeBalances(t).map((x) => [x.personId, x]))
+    expect(rows[a]?.paid).toBeCloseTo(800)
+    expect(rows[a]?.share).toBeCloseTo(244 + 90 + 200)
+    expect(rows[b]?.paid).toBeCloseTo(0)
+    expect(rows[b]?.share).toBeCloseTo(90 + 176)
+    expect(rows[b]?.net).toBeCloseTo(-(90 + 176))
+    expect(suggestedTransfers(t)).toMatchObject([{ fromId: b, toId: a, amount: 266 }])
+  })
+
+  it('treats custom splits without share amounts as equal', () => {
+    const a = 'a'
+    const b = 'b'
+    const t = trip({
+      people: [
+        { id: a, name: 'A', color: '#000' },
+        { id: b, name: 'B', color: '#111' },
+      ],
+      expenses: [
+        {
+          id: 'e1',
+          amount: 40,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'custom',
+          categoryId: 'food',
+          note: '',
+          date: '2026-09-01',
+          createdAt: 1,
+        },
+      ],
+    })
+    const rows = Object.fromEntries(computeBalances(t).map((x) => [x.personId, x]))
+    expect(rows[a]?.share).toBeCloseTo(20)
+    expect(rows[b]?.share).toBeCloseTo(20)
   })
 })
 
@@ -280,5 +370,10 @@ describe('settle-up payments', () => {
     expect(suggestedTransfers(settled)).toHaveLength(0)
     expect(personSpendPaid(settled, a)).toBeCloseTo(100)
     expect(personSpendPaid(settled, b)).toBeCloseTo(0)
+    const rows = Object.fromEntries(computeBalances(settled).map((row) => [row.personId, row]))
+    expect(rows[a]?.paid).toBeCloseTo(100)
+    expect(rows[a]?.share).toBeCloseTo(50)
+    expect(rows[b]?.paid).toBeCloseTo(0)
+    expect(rows[b]?.share).toBeCloseTo(50)
   })
 })

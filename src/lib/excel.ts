@@ -1,5 +1,5 @@
 import type { Trip } from '../types'
-import { toBase } from './money'
+import { expenseShares, toBase } from './money'
 import { computeBalances, suggestedTransfers } from './settle'
 import { slugify } from './share'
 
@@ -269,6 +269,17 @@ export function workbookXlsx(sheets: { name: string; rows: Cell[][] }[]): Uint8A
   return zipStore(files)
 }
 
+function shareExport(expense: Trip['expenses'][number], names: Map<string, string>): string {
+  if (expense.splitMode === 'equal') return ''
+  if (expense.splitMode === 'percent' && expense.shares) {
+    return expense.participantIds
+      .map((id) => `${names.get(id) ?? 'Friend'} ${expense.shares?.[id] ?? 0}%`)
+      .join(', ')
+  }
+  const parts = expenseShares(expense)
+  return expense.participantIds.map((id) => `${names.get(id) ?? 'Friend'} ${parts[id] ?? 0}`).join(', ')
+}
+
 function peopleNames(trip: Trip): Map<string, string> {
   return new Map(trip.people.map((p) => [p.id, p.name]))
 }
@@ -280,7 +291,7 @@ function expenseSheet(trip: Trip): Cell[][] {
     (a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt,
   )
   const rows: Cell[][] = [
-    ['Date', 'Note', 'Category', 'Paid by', 'Amount', 'Currency', `Amount (${trip.baseCurrency})`, 'Split', 'Participants'],
+    ['Date', 'Note', 'Category', 'Paid by', 'Amount', 'Currency', `Amount (${trip.baseCurrency})`, 'Split', 'Participants', 'Shares'],
   ]
   for (const expense of sorted) {
     const cat = cats.get(expense.categoryId)
@@ -294,6 +305,7 @@ function expenseSheet(trip: Trip): Cell[][] {
       toBase(expense.amount, expense.currency, trip),
       expense.splitMode,
       expense.participantIds.map((id) => names.get(id) ?? 'Friend').join(', '),
+      shareExport(expense, names),
     ])
   }
   return rows
@@ -392,7 +404,17 @@ export async function downloadExcel(filename: string, bytes: Uint8Array): Promis
   return 'download'
 }
 
-export const IMPORT_HEADERS = ['Date', 'Note', 'Amount', 'Currency', 'Paid by', 'Split between', 'Category'] as const
+export const IMPORT_HEADERS = [
+  'Date',
+  'Note',
+  'Amount',
+  'Currency',
+  'Paid by',
+  'Split between',
+  'Category',
+  'Split',
+  'Shares',
+] as const
 
 export function tripImportTemplateXlsx(trip: Trip): Uint8Array {
   const expenses: Cell[][] = [[...IMPORT_HEADERS]]

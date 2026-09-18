@@ -134,10 +134,13 @@ export function percentToAmounts(
 export function expenseShares(expense: Expense): Record<string, number> {
   if (expense.splitMode === 'custom' && expense.shares) {
     const out: Record<string, number> = {}
+    let sum = 0
     for (const id of expense.participantIds) {
-      out[id] = expense.shares[id] ?? 0
+      const n = expense.shares[id] ?? 0
+      out[id] = n
+      sum += n
     }
-    return out
+    if (sum > 0) return out
   }
   if (expense.splitMode === 'percent' && expense.shares) {
     return percentToAmounts(expense.amount, expense.shares, expense.participantIds, expense.currency)

@@ -51,6 +51,7 @@ describe('excel export', () => {
     expect(files['xl/worksheets/sheet1.xml']).toContain('Live croissant')
     expect(files['xl/worksheets/sheet1.xml']).toContain('Alex')
     expect(files['xl/worksheets/sheet1.xml']).toContain('>42</v>')
+    expect(files['xl/worksheets/sheet1.xml']).toContain('Shares')
     expect(XLSX_MIME).toContain('spreadsheetml.sheet')
   })
 

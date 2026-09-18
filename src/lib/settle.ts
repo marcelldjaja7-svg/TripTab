@@ -1,6 +1,13 @@
 import type { Expense, PersonBalance, Transfer, Trip } from '../types'
 import { currencyDecimals } from './currencies'
-import { expenseShares, fromMinor, isSettlement, toBaseMinor } from './money'
+import {
+  equalShares,
+  expenseShares,
+  formatMoney,
+  fromMinor,
+  isSettlement,
+  toBaseMinor,
+} from './money'
 import { uid } from './utils'
 import { todayISO } from './dates'
 
@@ -13,40 +20,71 @@ type MinorBalance = {
   net: number
 }
 
+function participantIdsOf(expense: Expense): string[] {
+  const ids = expense.participantIds.filter(Boolean)
+  if (ids.length > 0) return [...new Set(ids)]
+  return expense.paidBy ? [expense.paidBy] : []
+}
+
+/** Each participant's portion of a bill, in base-currency minor units. Honors equal / custom / percent. */
+export function expenseShareMinor(trip: Trip, expense: Expense): Map<string, number> {
+  const ids = participantIdsOf(expense)
+  const totalMinor = toBaseMinor(expense.amount, expense.currency, trip)
+  const out = new Map<string, number>()
+  if (ids.length === 0 || totalMinor === 0) return out
+
+  let parts = expenseShares({ ...expense, participantIds: ids })
+  let partSum = Object.values(parts).reduce((sum, n) => sum + n, 0)
+  if (partSum <= 0) {
+    parts = equalShares(expense.amount, ids, expense.currency)
+    partSum = Object.values(parts).reduce((sum, n) => sum + n, 0)
+  }
+  if (partSum <= 0) {
+    out.set(ids[0]!, totalMinor)
+    return out
+  }
+
+  let allocated = 0
+  ids.forEach((id, index) => {
+    const last = index === ids.length - 1
+    const minor = last ? totalMinor - allocated : Math.round(((parts[id] ?? 0) / partSum) * totalMinor)
+    if (!last) allocated += minor
+    out.set(id, minor)
+  })
+  return out
+}
+
 export function computeMinorBalances(trip: Trip): MinorBalance[] {
   const paid = new Map<string, number>()
   const share = new Map<string, number>()
+  const settleAdj = new Map<string, number>()
   for (const person of trip.people) {
     paid.set(person.id, 0)
     share.set(person.id, 0)
+    settleAdj.set(person.id, 0)
   }
 
   for (const expense of trip.expenses) {
     const totalMinor = toBaseMinor(expense.amount, expense.currency, trip)
-    paid.set(expense.paidBy, (paid.get(expense.paidBy) ?? 0) + totalMinor)
-
-    const parts = expenseShares(expense)
-    const partSum = Object.values(parts).reduce((s, n) => s + n, 0)
-    if (partSum <= 0 || expense.participantIds.length === 0) continue
-
-    let allocated = 0
-    expense.participantIds.forEach((id, index) => {
-      const last = index === expense.participantIds.length - 1
-      let minor: number
-      if (last) {
-        minor = totalMinor - allocated
-      } else {
-        minor = Math.round((parts[id] / partSum) * totalMinor)
-        allocated += minor
+    const portions = expenseShareMinor(trip, expense)
+    if (isSettlement(trip, expense)) {
+      settleAdj.set(expense.paidBy, (settleAdj.get(expense.paidBy) ?? 0) + totalMinor)
+      for (const [id, minor] of portions) {
+        settleAdj.set(id, (settleAdj.get(id) ?? 0) - minor)
       }
+      continue
+    }
+    paid.set(expense.paidBy, (paid.get(expense.paidBy) ?? 0) + totalMinor)
+    for (const [id, minor] of portions) {
       share.set(id, (share.get(id) ?? 0) + minor)
-    })
+    }
   }
 
   return trip.people.map((person) => {
     const p = paid.get(person.id) ?? 0
     const s = share.get(person.id) ?? 0
-    return { personId: person.id, paid: p, share: s, net: p - s }
+    const adj = settleAdj.get(person.id) ?? 0
+    return { personId: person.id, paid: p, share: s, net: p - s + adj }
   })
 }
 
@@ -62,13 +100,13 @@ export function computeBalances(trip: Trip): PersonBalance[] {
 
 /** Amount this person paid for group purchases — settle-up transfers do not count. */
 export function personSpendPaid(trip: Trip, personId: string): number {
-  const decimals = currencyDecimals(trip.baseCurrency)
-  let minor = 0
-  for (const expense of trip.expenses) {
-    if (expense.paidBy !== personId || isSettlement(trip, expense)) continue
-    minor += toBaseMinor(expense.amount, expense.currency, trip)
-  }
-  return fromMinor(minor, decimals)
+  return computeBalances(trip).find((row) => row.personId === personId)?.paid ?? 0
+}
+
+export function describeBalance(b: PersonBalance, currency: string): string {
+  if (Math.abs(b.net) < 0.005) return 'Settled'
+  if (b.net > 0) return `Is owed ${formatMoney(b.net, currency)}`
+  return `Owes ${formatMoney(-b.net, currency)}`
 }
 
 export function suggestedTransfers(trip: Trip): Transfer[] {
