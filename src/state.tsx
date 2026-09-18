@@ -120,18 +120,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
 
     void (async () => {
-      const first =
-        (await pullLatestLiveTrip(liveId)) ??
-        (await pullLiveTrip(liveId))
-      const waited = await waitForLiveTrip(liveId, first?.expenses.length ? 2000 : 8000)
+      const first = (await pullLatestLiveTrip(liveId)) ?? (await pullLiveTrip(liveId))
+      const waited = await waitForLiveTrip(liveId, 8000)
       const remote = first && waited ? mergeTrips(first, waited) : waited ?? first
-      if (remote) {
+      const localNow =
+        dataRef.current.trips.find((t) => t.shareId === liveId) ?? localMatch ?? usefulSnapshot ?? null
+      const merged = remote && localNow ? mergeTrips(localNow, remote) : remote ?? localNow ?? null
+      if (merged && (remote || localNow)) {
         setData((prev) => {
-          const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
+          const next = { ...prev, ...adoptSharedTrip(prev.trips, merged, liveId) }
           saveAppData(next)
           return next
         })
         setLiveShareHash(liveId)
+        if (shouldPublishLive(merged, remote ?? null)) {
+          void pushLiveTrip(liveId, merged)
+        }
         if (!localMatch && !usefulSnapshot) notify('Live trip — everyone on this link can add expenses')
         return
       }
@@ -172,12 +176,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
             }))
           }
-          // Never publish a stale phone over the room if we have not pulled yet.
-          if (remote ? shouldPublishLive(latest, remote) : !firstForRoom && latest.expenses.length > 0) {
+          if (shouldPublishLive(latest, remote)) {
             await pushLiveTrip(shareId, merged)
           }
           setLiveShareHash(shareId)
-          if (remote || !firstForRoom) liveReadyRef.current = shareId
+          liveReadyRef.current = shareId
         } catch {
           /* stay local if the room is briefly unreachable */
         }
@@ -208,12 +211,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return next
       })
     }
+    let assembleTimer: ReturnType<typeof setTimeout> | undefined
     const unsub = subscribeLivePings(
       shareId,
       (ping) => {
         void tripFromPing(ping, shareId).then((remote) => {
           if (remote && remote.expenses.length > 0) applyRemote(remote)
         })
+        window.clearTimeout(assembleTimer)
+        assembleTimer = window.setTimeout(() => {
+          void pullLatestLiveTrip(shareId).then((remote) => {
+            if (remote) applyRemote(remote)
+          })
+        }, 200)
       },
       applyRemote,
     )
@@ -234,6 +244,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (remote) applyRemote(remote)
     })
     return () => {
+      window.clearTimeout(assembleTimer)
       unsub()
       document.removeEventListener('visibilitychange', onVis)
       window.removeEventListener('online', onOnline)
@@ -413,12 +424,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           return
         }
         try {
-          const remote = await pullLatestLiveTrip(trip.shareId)
+          const remote =
+            (await waitForLiveTrip(trip.shareId, 5000)) ?? (await pullLatestLiveTrip(trip.shareId))
           const latest = dataRef.current.trips.find((t) => t.id === trip.id) ?? trip
           const merged = remote ? mergeTrips(latest, remote) : latest
-          if (shouldPublishLive(latest, remote) || !remote) {
-            await pushLiveTrip(trip.shareId, merged)
-          }
+          await pushLiveTrip(trip.shareId, merged)
           setLiveShareHash(trip.shareId)
           setData((prev) => ({
             ...prev,
@@ -426,7 +436,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               t.id === latest.id ? { ...merged, id: latest.id, shareId: trip.shareId } : t,
             ),
           }))
-          notify(remote ? 'Synced with the group' : 'Your bills are live — waiting for friends')
+          notify(`Synced — ${merged.expenses.length} bills live with the group`)
         } catch {
           notify('Could not reach live sync right now')
         }

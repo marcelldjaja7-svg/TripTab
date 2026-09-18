@@ -275,6 +275,7 @@ describe('live room payload', () => {
       ),
     })
     const order: string[] = []
+    const ntfyBodies: string[] = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
@@ -287,8 +288,7 @@ describe('live room payload', () => {
       }
       if (url.includes('ntfy') && method === 'POST') {
         order.push('ntfy')
-        const body = String(init?.body ?? '')
-        expect(body).toContain('bin-huge')
+        ntfyBodies.push(String(init?.body ?? ''))
         return new Response('{}', { status: 200 })
       }
       return new Response('no', { status: 404 })
@@ -298,5 +298,7 @@ describe('live room payload', () => {
     await pushLiveTrip('tthuge', fat)
     expect(order[0]).toBe('bytebin')
     expect(order).toContain('ntfy')
+    expect(ntfyBodies.some((body) => body.includes('bin-huge'))).toBe(true)
+    expect(ntfyBodies.every((body) => body.length <= 4000)).toBe(true)
   })
 })

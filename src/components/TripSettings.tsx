@@ -344,7 +344,7 @@ export function TripSettings({
       <SectionLabel>Live sync</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
         {trip.shareId
-          ? `This trip is live. ${liveUpdateLabel(trip)}. Pick who you are so friends see who added a bill.`
+          ? `Live is on. Bills publish in small pieces so every phone and laptop shares the same log. ${liveUpdateLabel(trip)}. If Spent or Logged still differ, tap Sync now on each device.`
           : 'Start a live trip to share bills in real time. Pick who you are on this phone first.'}
       </p>
       <Group>

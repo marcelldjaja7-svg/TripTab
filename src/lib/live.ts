@@ -29,6 +29,8 @@ export type LivePing = {
   at: number
   by: string
   who?: string
+  /** Total bills on the publisher's trip so peers keep pulling until they match. */
+  n?: number
 }
 
 export function liveClientId(): string {
@@ -89,6 +91,7 @@ export function parseLivePing(raw: unknown): LivePing | null {
       at: ping.at,
       by: ping.by,
       who: typeof ping.who === 'string' && ping.who.trim() ? ping.who.trim() : undefined,
+      n: typeof ping.n === 'number' && ping.n >= 0 ? ping.n : undefined,
     }
   } catch {
     return null
@@ -262,15 +265,94 @@ export async function tripFromPing(ping: LivePing, shareId: string): Promise<Tri
   return withLiveMeta(trip, shareId, ping)
 }
 
-function clipPingForNtfy(full: LivePing, header: string): LivePing {
-  if (JSON.stringify(full).length <= PING_MAX) return full
-  const withHeader: LivePing = { ...full, p: header }
-  if (JSON.stringify(withHeader).length <= PING_MAX) return withHeader
-  return { ...full, p: undefined }
+function pingFingerprint(trip: Trip): string {
+  return `${trip.updatedAt}:${trip.expenses.length}`
 }
 
-function pingFingerprint(trip: Trip): string {
-  return `${trip.updatedAt}:${trip.expenses.map((e) => `${e.id}:${e.updatedAt ?? e.createdAt}:${e.amount}`).join(',')}:${trip.people.length}`
+function pingSize(ping: LivePing): number {
+  return JSON.stringify(ping).length
+}
+
+function liveWho(trip: Trip): string | undefined {
+  const who = trip.updatedByName?.trim()
+  return who ? who.slice(0, 40) : undefined
+}
+
+function livePartFp(trip: Trip, part: string): string {
+  return `${trip.updatedAt}-${trip.expenses.length}-${part}`
+}
+
+function slimExpenseNote(expense: Trip['expenses'][number], noteMax: number): Trip['expenses'][number] {
+  if (expense.note.length <= noteMax) return expense
+  return { ...expense, note: expense.note.slice(0, noteMax) }
+}
+
+function packLiveChunk(header: Trip, trip: Trip, expenses: Trip['expenses']): Trip {
+  return {
+    ...header,
+    expenses,
+    deletedExpenseIds: trip.deletedExpenseIds ?? [],
+    updatedAt: trip.updatedAt,
+    updatedBy: trip.updatedBy,
+    updatedByName: trip.updatedByName,
+    shareId: trip.shareId,
+  }
+}
+
+function chunkPing(trip: Trip, chunk: Trip, part: string): LivePing {
+  return {
+    v: 1,
+    p: encodeTripShare(chunk),
+    fp: livePartFp(trip, part),
+    at: 9_999_999_999_999,
+    by: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+    who: liveWho(trip) ?? 'friend',
+    n: trip.expenses.length,
+  }
+}
+
+function chunkFits(trip: Trip, chunk: Trip): boolean {
+  return pingSize(chunkPing(trip, chunk, '99/99')) <= PING_MAX
+}
+
+function splitLiveChunk(header: Trip, trip: Trip, chunk: Trip): Trip[] {
+  if (chunkFits(trip, chunk)) return [chunk]
+  if (chunk.expenses.length <= 1) {
+    const slim = packLiveChunk(
+      header,
+      trip,
+      chunk.expenses.map((expense) => slimExpenseNote(expense, 24)),
+    )
+    return [slim]
+  }
+  const mid = Math.ceil(chunk.expenses.length / 2)
+  return [
+    ...splitLiveChunk(header, trip, packLiveChunk(header, trip, chunk.expenses.slice(0, mid))),
+    ...splitLiveChunk(header, trip, packLiveChunk(header, trip, chunk.expenses.slice(mid))),
+  ]
+}
+
+/** Split a fat trip into ntfy-sized copies so 45-bill rooms reconstruct without bytebin. */
+export function chunkTripForLive(trip: Trip): Trip[] {
+  const header = compactTripHeader(trip)
+  const whole = packLiveChunk(header, trip, trip.expenses)
+  if (chunkFits(trip, whole)) return [trip]
+
+  const chunks: Trip[] = []
+  let batch: Trip['expenses'] = []
+  const flush = () => {
+    if (batch.length === 0) return
+    chunks.push(...splitLiveChunk(header, trip, packLiveChunk(header, trip, batch)))
+    batch = []
+  }
+
+  for (const expense of trip.expenses) {
+    const trial = packLiveChunk(header, trip, [...batch, expense])
+    if (batch.length > 0 && !chunkFits(trip, trial)) flush()
+    batch = [...batch, expense]
+  }
+  flush()
+  return chunks.length > 0 ? chunks : [header]
 }
 
 async function postLivePing(relay: string, topic: string, body: string, ms: number): Promise<void> {
@@ -287,30 +369,69 @@ async function postLivePing(relay: string, topic: string, body: string, ms: numb
 
 export async function publishLivePing(shareId: string, trip: Trip, bin?: string | null): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
-  const encoded = encodeTripShare(withId)
-  const ping: LivePing = {
+  rememberLiveTrip(shareId, withId)
+  const full: LivePing = {
     v: 1,
     bin: bin || undefined,
-    p: encoded,
+    p: encodeTripShare(withId),
     fp: pingFingerprint(withId),
     at: Date.now(),
     by: liveClientId(),
-    who: withId.updatedByName,
+    who: liveWho(withId),
+    n: withId.expenses.length,
   }
-  rememberLiveTrip(shareId, withId)
   try {
-    channelFor(shareId)?.postMessage(ping)
+    channelFor(shareId)?.postMessage(full)
   } catch {
     /* older browsers */
   }
-  const forNtfy = clipPingForNtfy(ping, encodeTripShare(compactTripHeader(withId)))
-  const body = JSON.stringify(forNtfy)
+
+  const chunks = chunkTripForLive(withId)
   const topic = liveTopic(shareId)
-  // ntfy.sh often hangs or 429s from this IP — do not block other phones on it.
-  void postLivePing(PRIMARY_RELAY, topic, body, 2000)
+  const bodies: string[] = []
+  if (bin) {
+    const binPing: LivePing = {
+      v: 1,
+      bin,
+      fp: `${full.fp}:bin`,
+      at: full.at,
+      by: full.by,
+      who: full.who,
+      n: withId.expenses.length,
+    }
+    bodies.push(JSON.stringify(binPing))
+  }
+  for (const [i, chunk] of chunks.entries()) {
+    const ping: LivePing = {
+      v: 1,
+      p: encodeTripShare(chunk),
+      fp: livePartFp(withId, `${i}/${chunks.length}`),
+      at: full.at,
+      by: full.by,
+      who: full.who,
+      n: withId.expenses.length,
+    }
+    if (pingSize(ping) > PING_MAX) {
+      const slimmer = packLiveChunk(
+        compactTripHeader(withId),
+        withId,
+        chunk.expenses.map((expense) => slimExpenseNote(expense, 24)),
+      )
+      ping.p = encodeTripShare(slimmer)
+    }
+    if (pingSize(ping) > PING_MAX) continue
+    bodies.push(JSON.stringify(ping))
+  }
+
+  const sendAll = Promise.all(
+    bodies.map(async (body) => {
+      void postLivePing(PRIMARY_RELAY, topic, body, 2000)
+      await Promise.allSettled(FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 900)))
+    }),
+  )
   await Promise.race([
-    Promise.allSettled(FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 1200))),
-    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1300)),
+    sendAll,
+    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1200)),
   ])
 }
 
@@ -353,8 +474,11 @@ export async function pollLivePings(
   return merged
 }
 
-export async function pullLatestLiveTrip(shareId: string): Promise<Trip | null> {
+export async function pullLiveRoom(
+  shareId: string,
+): Promise<{ trip: Trip | null; expected: number }> {
   const pings = await pollLivePings(shareId)
+  const expected = pings.reduce((max, ping) => Math.max(max, ping.n ?? 0), 0)
   let merged: Trip | null = recalledLiveTrip(shareId)
   for (const ping of pings) {
     const trip = await tripFromPing(ping, shareId)
@@ -362,7 +486,11 @@ export async function pullLatestLiveTrip(shareId: string): Promise<Trip | null> 
     merged = merged ? mergeTrips(merged, trip) : trip
   }
   if (merged) rememberLiveTrip(shareId, merged)
-  return merged
+  return { trip: merged, expected }
+}
+
+export async function pullLatestLiveTrip(shareId: string): Promise<Trip | null> {
+  return (await pullLiveRoom(shareId)).trip
 }
 
 export function subscribeLivePings(
@@ -395,13 +523,14 @@ export async function waitForLiveTrip(shareId: string, ms = 8000): Promise<Trip 
   let best: Trip | null = recalledLiveTrip(shareId)
   let stable = 0
   while (Date.now() - started < ms) {
-    const trip = await pullLatestLiveTrip(shareId)
+    const { trip, expected } = await pullLiveRoom(shareId)
     if (trip) {
       const next = best ? mergeTrips(best, trip) : trip
+      const complete = expected === 0 || next.expenses.length >= expected
       if (best && liveContentKey(next) === liveContentKey(best)) {
         stable += 1
         best = next
-        if (stable >= 1 && best.expenses.length > 0) return best
+        if (stable >= 1 && best.expenses.length > 0 && complete) return best
       } else {
         stable = 0
         best = next
@@ -409,5 +538,5 @@ export async function waitForLiveTrip(shareId: string, ms = 8000): Promise<Trip 
     }
     await new Promise((resolve) => globalThis.setTimeout(resolve, 450))
   }
-  return best ?? pullLatestLiveTrip(shareId)
+  return (await pullLiveRoom(shareId)).trip ?? best
 }
