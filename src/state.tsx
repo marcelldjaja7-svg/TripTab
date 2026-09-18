@@ -75,6 +75,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
   const dataRef = useRef(data)
   dataRef.current = data
+  const liveReadyRef = useRef<string | null>(null)
 
   useEffect(() => {
     saveAppData(data)
@@ -95,11 +96,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!liveId && !snapshot) return
     shareJoinStarted = true
 
+    const usefulSnapshot = snapshot && snapshot.expenses.length > 0 ? snapshot : null
     const localMatch = dataRef.current.trips.find(
-      (t) => (liveId && t.shareId === liveId) || (snapshot && t.id === snapshot.id),
+      (t) => (liveId && t.shareId === liveId) || (usefulSnapshot && t.id === usefulSnapshot.id),
     )
-    if (localMatch || snapshot) {
-      const incoming = snapshot ?? localMatch
+    if (localMatch || usefulSnapshot) {
+      const incoming = usefulSnapshot ?? localMatch
       if (incoming) {
         setData((prev) => {
           const next = { ...prev, ...adoptSharedTrip(prev.trips, incoming, liveId ?? incoming.shareId) }
@@ -110,30 +112,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
 
     if (!liveId) {
-      if (snapshot) {
+      if (usefulSnapshot) {
         window.history.replaceState(null, '', window.location.pathname + window.location.search)
-        notify(`Opened “${snapshot.name}”`)
+        notify(`Opened “${usefulSnapshot.name}”`)
       }
       return
     }
 
     void (async () => {
-      const remote =
+      const first =
         (await pullLatestLiveTrip(liveId)) ??
-        (await pullLiveTrip(liveId)) ??
-        (localMatch || snapshot ? null : await waitForLiveTrip(liveId, 2500))
+        (await pullLiveTrip(liveId))
+      const waited = await waitForLiveTrip(liveId, first?.expenses.length ? 2000 : 8000)
+      const remote = first && waited ? mergeTrips(first, waited) : waited ?? first
       if (remote) {
         setData((prev) => {
           const next = { ...prev, ...adoptSharedTrip(prev.trips, remote, liveId) }
           saveAppData(next)
           return next
         })
-        setLiveShareHash(liveId, remote)
-        if (!localMatch && !snapshot) notify('Live trip — everyone on this link can add expenses')
+        setLiveShareHash(liveId)
+        if (!localMatch && !usefulSnapshot) notify('Live trip — everyone on this link can add expenses')
         return
       }
-      if (localMatch || snapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
-        setLiveShareHash(liveId, snapshot ?? localMatch ?? undefined)
+      if (localMatch || usefulSnapshot || dataRef.current.trips.some((t) => t.shareId === liveId)) {
+        setLiveShareHash(liveId)
         return
       }
       notify('Waiting for the live trip. Add a bill on another phone and it will appear here.')
@@ -150,15 +153,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!trip?.shareId) return
     const shareId = trip.shareId
     const local = trip
+    const firstForRoom = liveReadyRef.current !== shareId
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
-          // Pull every live copy first. A stale 12-bill phone must not overwrite 43 bills.
+          // After the first pull, push this phone's new bills immediately so entries record live.
+          if (!firstForRoom && local.expenses.length > 0) {
+            await pushLiveTrip(shareId, local)
+            setLiveShareHash(shareId)
+          }
           const remote = await pullLatestLiveTrip(shareId)
           const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? local
           const merged = remote ? mergeTrips(latest, remote) : latest
           if (tripFingerprint(merged) !== tripFingerprint(latest)) {
-            setLiveShareHash(shareId, merged)
+            setLiveShareHash(shareId)
             setData((prev) => ({
               ...prev,
               trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
@@ -166,15 +174,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           if (shouldPublishLive(latest, remote)) {
             await pushLiveTrip(shareId, merged)
-            setLiveShareHash(shareId, merged)
-          } else {
-            setLiveShareHash(shareId, merged)
           }
+          setLiveShareHash(shareId)
+          liveReadyRef.current = shareId
         } catch {
           /* stay local if the room is briefly unreachable */
         }
       })()
-    }, 50)
+    }, firstForRoom ? 50 : 0)
     return () => window.clearTimeout(handle)
   }, [liveSig])
 
@@ -267,7 +274,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const trip = data.trips.find((t) => t.id === id)
         if (trip?.shareId) {
           setLiveRoomId(trip.shareId)
-          setLiveShareHash(trip.shareId, trip)
+          setLiveShareHash(trip.shareId)
         } else {
           setLiveRoomId(null)
           clearLiveShareLocation()
@@ -355,13 +362,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
         }))
         setLiveRoomId(shareId)
-        setLiveShareHash(shareId, next)
+        setLiveShareHash(shareId)
         let live = false
         try {
           await pushLiveTrip(shareId, next)
           live = true
         } catch {
-          /* snapshot in the link still opens the trip; later saves retry */
+          /* live room retries on the next save */
         }
         const url = shareLinkForTrip(next, shareId)
         try {
@@ -410,7 +417,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (shouldPublishLive(latest, remote) || !remote) {
             await pushLiveTrip(trip.shareId, merged)
           }
-          setLiveShareHash(trip.shareId, merged)
+          setLiveShareHash(trip.shareId)
           setData((prev) => ({
             ...prev,
             trips: prev.trips.map((t) =>

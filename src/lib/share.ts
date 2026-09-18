@@ -106,9 +106,6 @@ export function decodeTripShare(payload: string): Trip | null {
 /** Live site friends should open. Localhost invites are unreachable from a phone. */
 export const PUBLIC_APP_URL = 'https://marcelldjaja7-svg.github.io/TripTab/'
 export const PUBLIC_APP_BASE = '/TripTab/'
-/** Query snapshots must stay tiny. iOS Safari and chat apps crash or truncate long URLs. */
-export const SNAP_QUERY_MAX = 1600
-export const SHARE_URL_MAX = 1800
 /** Skip huge leftover #s= dumps (they crash Safari). Still decode normal #import= snapshots. */
 export const SNAP_PAYLOAD_MAX = 24_000
 
@@ -202,12 +199,6 @@ export function shareLinkForTrip(
   url.search = ''
   url.hash = ''
   if (shareId) url.searchParams.set('t', shareId)
-  const header = encodeTripShare(compactTripHeader(trip))
-  if (header.length <= SNAP_QUERY_MAX) {
-    const withHeader = new URL(url)
-    withHeader.searchParams.set('s', header)
-    if (withHeader.toString().length <= SHARE_URL_MAX) return withHeader.toString()
-  }
   return url.toString()
 }
 

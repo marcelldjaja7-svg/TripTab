@@ -1,8 +1,6 @@
 import type { Trip } from '../types'
 import {
-  SNAP_QUERY_MAX,
   canonicalAppUrl,
-  compactTripHeader,
   decodeTripShare,
   encodeTripShare,
   parseShareLocation,
@@ -97,9 +95,13 @@ function roomPayload(json: RoomBody): { payload?: string; bin?: string; trip?: T
 }
 
 export function mintLiveShareId(): string {
-  return typeof crypto !== 'undefined' && crypto.randomUUID
-    ? `tt${crypto.randomUUID().replace(/-/g, '')}`
-    : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  const bytes = new Uint8Array(8)
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes)
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 36)
+  let id = 'tt'
+  for (const b of bytes) id += alphabet[b % 36]
+  return id
 }
 
 export async function createLiveRoom(trip: Trip): Promise<string> {
@@ -189,17 +191,13 @@ export function parseLiveShareId(): string | null {
   return parseShareLocation(window.location.href).shareId
 }
 
-export function setLiveShareHash(shareId: string, trip?: Trip): void {
+export function setLiveShareHash(shareId: string): void {
   const url = new URL(window.location.href)
   url.searchParams.set('t', shareId)
   url.searchParams.delete('trip')
   url.searchParams.delete('import')
-  url.hash = ''
   url.searchParams.delete('s')
-  if (trip) {
-    const header = encodeTripShare(compactTripHeader(trip))
-    if (header.length <= SNAP_QUERY_MAX) url.searchParams.set('s', header)
-  }
+  url.hash = ''
   const next = `${url.pathname}${url.search}`
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
     window.history.replaceState(null, '', next)

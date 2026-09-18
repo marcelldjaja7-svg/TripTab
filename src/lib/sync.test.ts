@@ -232,6 +232,7 @@ describe('live room payload', () => {
     const { createLiveRoom, pushLiveTrip } = await import('./sync')
     const id = await createLiveRoom(sample)
     expect(id.startsWith('tt')).toBe(true)
+    expect(id.length).toBe(10)
     await pushLiveTrip(id, { ...sample, shareId: id, expenses: [expense({ id: 'e-live', paidBy: 'a' })] })
     const urls = fetchMock.mock.calls.map(([input]) => String(input))
     expect(urls.some((url) => url.includes('ntfy'))).toBe(true)

@@ -1,5 +1,5 @@
 import type { Trip } from '../types'
-import { mergeTrips } from './merge'
+import { mergeTrips, liveContentKey } from './merge'
 import { compactTripHeader, decodeTripShare, encodeTripShare } from './share'
 import { normalizeTrip } from './storage'
 
@@ -187,10 +187,9 @@ function ensureTransport(shareId: string): void {
     // Keep polling every relay even when EventSource reports "open". ntfy.sh can
     // sit in a zombie open state and fallbacks still hold the uploaded bills.
     void pollLivePings(shareId).then((pings) => {
-      const last = pings.at(-1)
-      if (last) emitPing(shareId, last)
+      for (const ping of pings) emitPing(shareId, ping)
     })
-  }, 2500)
+  }, 1500)
 
   transports.set(shareId, () => {
     stopped = true
@@ -371,12 +370,24 @@ export function subscribeLivePings(shareId: string, onPing: (ping: LivePing) => 
   }
 }
 
-export async function waitForLiveTrip(shareId: string, ms = 2500): Promise<Trip | null> {
+export async function waitForLiveTrip(shareId: string, ms = 8000): Promise<Trip | null> {
   const started = Date.now()
+  let best: Trip | null = recalledLiveTrip(shareId)
+  let stable = 0
   while (Date.now() - started < ms) {
     const trip = await pullLatestLiveTrip(shareId)
-    if (trip) return trip
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 600))
+    if (trip) {
+      const next = best ? mergeTrips(best, trip) : trip
+      if (best && liveContentKey(next) === liveContentKey(best)) {
+        stable += 1
+        best = next
+        if (stable >= 1 && best.expenses.length > 0) return best
+      } else {
+        stable = 0
+        best = next
+      }
+    }
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 450))
   }
-  return pullLatestLiveTrip(shareId)
+  return best ?? pullLatestLiveTrip(shareId)
 }

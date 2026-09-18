@@ -11,6 +11,7 @@ import {
   pullLatestLiveTrip,
   subscribeLivePings,
   tripFromPing,
+  waitForLiveTrip,
 } from './live'
 import { compactTripForShare, decodeTripShare, encodeTripShare } from './share'
 import type { Expense, Trip } from '../types'
@@ -198,6 +199,26 @@ describe('live channel', () => {
     const trip = await pullLatestLiveTrip('tt-merge-counts')
     expect(trip?.expenses).toHaveLength(43)
     expect(trip?.updatedByName).toBe('43 bills')
+  })
+
+  it('keeps polling until the latest bills are recorded', async () => {
+    const pingLine = (trip: Trip, at: number) =>
+      JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: `fp-${at}`, at, by: 'friend', p: encodeTripShare(trip) }),
+      })
+    let round = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (!String(input).includes('/json')) return new Response('no', { status: 404 })
+        round += 1
+        const body = round < 3 ? pingLine(withBills(12, 10), 1) : pingLine(withBills(43, 50), 2)
+        return new Response(body, { status: 200 })
+      }),
+    )
+    const trip = await waitForLiveTrip('tt-wait-latest', 4000)
+    expect(trip?.expenses).toHaveLength(43)
   })
 
   it('never posts an oversized live ping body', async () => {
