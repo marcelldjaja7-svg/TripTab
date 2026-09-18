@@ -101,6 +101,8 @@ export function normalizeTrip(input: unknown): Trip | null {
     deletedExpenseIds: Array.isArray(raw.deletedExpenseIds)
       ? raw.deletedExpenseIds.filter((id): id is string => typeof id === 'string')
       : undefined,
+    updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : undefined,
+    updatedByName: typeof raw.updatedByName === 'string' && raw.updatedByName.trim() ? raw.updatedByName.trim() : undefined,
   }
 }
 

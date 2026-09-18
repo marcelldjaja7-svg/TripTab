@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatExpenseDate, parseExpenseDate } from './dates'
+import { formatExpenseDate, formatUpdatedAgo, liveUpdateLabel, parseExpenseDate } from './dates'
 import { normalizeTrip } from './storage'
 
 const now = new Date('2026-09-18T01:34:00')
@@ -34,6 +34,15 @@ describe('formatExpenseDate', () => {
   it('labels 17 September for the expense list', () => {
     expect(formatExpenseDate('2026-09-17')).toBe('Thu, Sep 17')
     expect(formatExpenseDate('17/09/2026')).toBe('Thu, Sep 17')
+  })
+})
+
+describe('live update label', () => {
+  it('shows who updated and how long ago', () => {
+    expect(formatUpdatedAgo(1_000, 10_000)).toBe('just now')
+    expect(formatUpdatedAgo(1_000, 45_000)).toBe('44s ago')
+    expect(formatUpdatedAgo(1_000, 125_000)).toBe('2m ago')
+    expect(liveUpdateLabel({ updatedAt: 1_000, updatedByName: 'Alex' }, 125_000)).toBe('Updated by Alex · 2m ago')
   })
 })
 

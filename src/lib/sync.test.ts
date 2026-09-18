@@ -59,6 +59,23 @@ describe('mergeTrips', () => {
     expect(ids).toEqual(['e1', 'e2'])
   })
 
+  it('keeps who last updated from the newer trip', () => {
+    const a = 'a'
+    const older = trip({
+      updatedAt: 10,
+      updatedByName: 'Sam',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [],
+    })
+    const newer = trip({
+      updatedAt: 40,
+      updatedByName: 'Alex',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a })],
+    })
+    expect(mergeTrips(older, newer).updatedByName).toBe('Alex')
+  })
+
   it('does not resurrect a deleted expense', () => {
     const a = 'a'
     const local = trip({

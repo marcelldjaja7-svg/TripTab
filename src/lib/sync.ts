@@ -182,6 +182,8 @@ export function mergeTrips(local: Trip, remote: Trip): Trip {
     deletedExpenseIds: [...deleted],
     isDemo: false,
     updatedAt: Math.max(local.updatedAt, remote.updatedAt),
+    updatedBy: newer.updatedAt >= older.updatedAt ? newer.updatedBy : older.updatedBy,
+    updatedByName: newer.updatedAt >= older.updatedAt ? newer.updatedByName : older.updatedByName,
   }
 }
 
