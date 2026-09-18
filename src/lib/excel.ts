@@ -1,6 +1,7 @@
 import type { Trip } from '../types'
-import { expenseShares, toBase } from './money'
-import { computeBalances, suggestedTransfers } from './settle'
+import { currencyDecimals } from './currencies'
+import { expenseShares, fromMinor, isSettlement, toBase } from './money'
+import { computeBalances, expenseShareMinor, suggestedTransfers } from './settle'
 import { slugify } from './share'
 
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -290,11 +291,25 @@ function expenseSheet(trip: Trip): Cell[][] {
   const sorted = [...trip.expenses].sort(
     (a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt,
   )
+  const decimals = currencyDecimals(trip.baseCurrency)
   const rows: Cell[][] = [
-    ['Date', 'Note', 'Category', 'Paid by', 'Amount', 'Currency', `Amount (${trip.baseCurrency})`, 'Split', 'Participants', 'Shares'],
+    [
+      'Date',
+      'Note',
+      'Category',
+      'Paid by',
+      'Amount',
+      'Currency',
+      `Amount (${trip.baseCurrency})`,
+      'Split',
+      'Participants',
+      'Shares',
+      ...trip.people.map((person) => `Share (${person.name})`),
+    ],
   ]
   for (const expense of sorted) {
     const cat = cats.get(expense.categoryId)
+    const portions = isSettlement(trip, expense) ? new Map<string, number>() : expenseShareMinor(trip, expense)
     rows.push([
       expense.date || '',
       expense.note.trim() || cat?.name || 'Expense',
@@ -306,6 +321,9 @@ function expenseSheet(trip: Trip): Cell[][] {
       expense.splitMode,
       expense.participantIds.map((id) => names.get(id) ?? 'Friend').join(', '),
       shareExport(expense, names),
+      ...trip.people.map((person) =>
+        isSettlement(trip, expense) ? '' : fromMinor(portions.get(person.id) ?? 0, decimals),
+      ),
     ])
   }
   return rows
@@ -313,9 +331,17 @@ function expenseSheet(trip: Trip): Cell[][] {
 
 function balanceSheet(trip: Trip): Cell[][] {
   const names = peopleNames(trip)
-  const rows: Cell[][] = [['Person', `Paid (${trip.baseCurrency})`, `Share (${trip.baseCurrency})`, `Net (${trip.baseCurrency})`]]
+  const rows: Cell[][] = [
+    [
+      'Person',
+      `Paid (${trip.baseCurrency})`,
+      `Share (${trip.baseCurrency})`,
+      `Settle-up (${trip.baseCurrency})`,
+      `Net (${trip.baseCurrency})`,
+    ],
+  ]
   for (const row of computeBalances(trip)) {
-    rows.push([names.get(row.personId) ?? 'Friend', row.paid, row.share, row.net])
+    rows.push([names.get(row.personId) ?? 'Friend', row.paid, row.share, row.settled, row.net])
   }
   return rows
 }
@@ -432,9 +458,10 @@ export function tripImportTemplateXlsx(trip: Trip): Uint8Array {
     ['3. Date as YYYY-MM-DD, for example 2026-09-18.'],
     [`4. Amount is what was paid. Leave Currency blank to use ${trip.baseCurrency}.`],
     ['5. Paid by must be a name from the Friends sheet, or a new name we will add.'],
-    ['6. Split between is optional. Comma-separated names. Blank = everyone on the trip.'],
-    ['7. Category should match the Categories sheet. Blank = Other.'],
-    ['8. Save the file, then tap Import Excel in this trip.'],
+    ['6. Split between is who the bill is for. Comma-separated names. Blank = only the person who paid.'],
+    ['7. Split is equal, custom, or percent. For custom or percent, fill Shares like Alex 200, Sam 176.'],
+    ['8. Category should match the Categories sheet. Blank = Other.'],
+    ['9. Save the file, then tap Import Excel in this trip.'],
     [''],
     [`Trip: ${trip.name}`],
     [`Friends: ${trip.people.map((p) => p.name).join(', ') || '(add friends first)'}`],

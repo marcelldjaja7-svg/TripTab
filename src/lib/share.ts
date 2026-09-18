@@ -17,7 +17,9 @@ export function tripSummaryText(trip: Trip): string {
 
   for (const b of balances) {
     const name = people.get(b.personId) ?? 'Friend'
-    lines.push(`• ${name}: ${describeNet(b, trip.baseCurrency)}`)
+    lines.push(
+      `• ${name}: split ${formatMoney(b.share, trip.baseCurrency)} · paid ${formatMoney(b.paid, trip.baseCurrency)} · ${describeNet(b, trip.baseCurrency)}`,
+    )
   }
 
   lines.push('')

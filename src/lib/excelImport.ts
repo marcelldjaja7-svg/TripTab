@@ -113,12 +113,13 @@ function mapHeaders(row: (string | number)[]): Cols | null {
     else if (
       key === 'split between' ||
       key === 'participants' ||
+      key === 'participant' ||
       key === 'split with' ||
       key === 'split among' ||
       key === 'for'
     ) {
       cols.participants = i
-    }     else if (key === 'category' || key === 'cat') cols.category = i
+    } else if (key === 'category' || key === 'cat') cols.category = i
     else if (key === 'split') cols.splitMode = i
     else if (key === 'shares' || key === 'share' || key === 'amounts' || key === '%') cols.shares = i
   })
@@ -279,9 +280,8 @@ export function importExpenseRows(trip: Trip, rows: (string | number)[][]): Exce
     }
     const payer = ensurePerson(people, paidName)
     const splitNames = namesList(cellText(row[cols.participants ?? -1]))
-    const participants = (splitNames.length ? splitNames : people.map((p) => p.name)).map((n) => ensurePerson(people, n))
+    const participants = (splitNames.length ? splitNames : [paidName]).map((n) => ensurePerson(people, n))
     const participantIds = [...new Set(participants.map((p) => p.id))]
-    if (!participantIds.includes(payer.id)) participantIds.push(payer.id)
     const categoryHint = cellText(row[cols.category ?? -1])
     const categoryId =
       guessCategoryId(`${note} ${categoryHint}`, trip.categories, categoryHint || undefined) ??

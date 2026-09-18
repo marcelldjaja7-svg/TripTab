@@ -71,7 +71,12 @@ export type Transfer = {
 
 export type PersonBalance = {
   personId: string
+  /** What they covered on group purchases (settle-up is not spend). */
   paid: number
+  /** Their cut of each bill (equal / custom / percent). */
   share: number
+  /** Settle-up transfers: positive = they paid a friend back. */
+  settled: number
+  /** paid − share + settled. Positive = is owed. */
   net: number
 }

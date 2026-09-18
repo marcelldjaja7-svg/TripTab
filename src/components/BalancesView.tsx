@@ -1,7 +1,14 @@
 import { ArrowUpRight, Check, Copy, Crown } from 'lucide-react'
-import { formatMoney } from '../lib/money'
+import { formatMoney, tripTotalBase } from '../lib/money'
 import { describeTransfer } from '../lib/share'
-import { computeBalances, describeBalance, personSpendPaid, settlementExpense, suggestedTransfers } from '../lib/settle'
+import {
+  computeBalances,
+  describeBalance,
+  describeSettled,
+  personSpendPaid,
+  settlementExpense,
+  suggestedTransfers,
+} from '../lib/settle'
 import { cn } from '../lib/utils'
 import type { Person, Trip } from '../types'
 import { Avatar, Button, Group, GroupRow, SectionLabel } from './ui'
@@ -22,13 +29,12 @@ export function BalancesView({
   trip: Trip
   onLogSettlement: (next: Trip) => void
 }) {
-  const balances = [...computeBalances(trip)].sort((a, b) => {
-    const paidA = personSpendPaid(trip, a.personId)
-    const paidB = personSpendPaid(trip, b.personId)
-    return paidB - paidA
-  })
+  const rows = computeBalances(trip)
+  const byShare = [...rows].sort((a, b) => b.share - a.share || b.paid - a.paid)
   const transfers = suggestedTransfers(trip)
-  const ranked = balances
+  const spent = tripTotalBase(trip)
+  const ranked = [...rows]
+    .sort((a, b) => personSpendPaid(trip, b.personId) - personSpendPaid(trip, a.personId))
     .map((b) => {
       const person = trip.people.find((p) => p.id === b.personId)
       return person ? { ...b, person, paid: personSpendPaid(trip, b.personId) } : null
@@ -41,65 +47,17 @@ export function BalancesView({
 
   return (
     <div className="pb-4">
-      <article className="casino-felt relative overflow-hidden rounded-[28px] px-4 pb-5 pt-6 text-[#f4e7c3] sm:px-6">
-        <span className="absolute left-4 top-4 text-[16px] text-[#d4af37]/70">♠</span>
-        <span className="absolute right-4 top-4 text-[16px] text-[#d4af37]/70">♦</span>
-        <p className="text-center text-[11px] font-semibold uppercase tracking-[0.34em] text-[#d4af37]">
-          The TripTab Club
-        </p>
-        <h2 className="casino-serif mt-2 text-center text-[34px] leading-none tracking-tight text-[#f6e7b2] sm:text-[40px]">
-          High Rollers
-        </h2>
-        <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">The friends picking up the tab.</p>
-
-        {ranked.length === 0 ? (
-          <p className="mt-8 pb-4 text-center text-[15px] text-[#d9c48a]/70">Add friends to open the table.</p>
-        ) : (
-          <>
-            <div className="mt-5 flex items-end justify-center gap-3 sm:gap-5">
-              {second ? <PodiumSeat place={2} person={second.person} paid={second.paid} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
-              {first ? <PodiumSeat place={1} person={first.person} paid={first.paid} currency={trip.baseCurrency} /> : null}
-              {third ? <PodiumSeat place={3} person={third.person} paid={third.paid} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
-            </div>
-
-            <ol className="mt-4 space-y-0.5">
-              {ranked.map((row, index) => (
-                <li
-                  key={row.personId}
-                  className="flex items-center gap-3 rounded-[14px] px-2 py-1.5"
-                >
-                  <span className="w-7 text-center font-semibold tabular-nums text-[#d4af37]/80">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  <Avatar person={row.person} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[16px] font-semibold text-[#f7efd2]">{row.person.name}</p>
-                    <p className={cn('truncate text-[12px]', index === 0 ? 'font-semibold tracking-wide text-[#d4af37]' : 'text-[#cbb98a]/75')}>
-                      {titleForRank(index, row.paid)}
-                    </p>
-                  </div>
-                  <p className="text-right text-[15px] font-semibold tabular-nums text-[#f6e7b2]">
-                    {formatMoney(row.paid, trip.baseCurrency)}
-                  </p>
-                </li>
-              ))}
-            </ol>
-            <p className="mt-3 text-center text-[11px] uppercase tracking-[0.18em] text-[#d4af37]/55">
-              ♣ Ranked by bills paid for the group ♣
-            </p>
-          </>
-        )}
-      </article>
-
-      <SectionLabel>Each person's totals</SectionLabel>
+      <SectionLabel>Each person's split</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Paid is what they covered. Share is their split of each bill (equal, custom amounts, or percent). Settle-up
-        payments change the net, not trip spend.
+        The large amount is this friend's share of the trip: personal bills stay with them, equal
+        splits divide evenly, custom and percent use the amounts on the bill. Paid is who covered
+        the card. Settle-up payments move the net, not trip spend.
       </p>
       <Group>
-        {computeBalances(trip).map((row) => {
+        {byShare.map((row) => {
           const person = trip.people.find((p) => p.id === row.personId)
           if (!person) return null
+          const settled = describeSettled(row, trip.baseCurrency)
           return (
             <GroupRow key={row.personId} className="items-start py-3">
               <Avatar person={person} />
@@ -107,22 +65,32 @@ export function BalancesView({
                 <p className="truncate text-[17px] font-medium">{person.name}</p>
                 <p className="mt-0.5 text-[13px] text-[var(--muted)]">
                   Paid {formatMoney(row.paid, trip.baseCurrency)}
-                  <span className="mx-1.5">·</span>
-                  Share {formatMoney(row.share, trip.baseCurrency)}
+                  {settled ? (
+                    <>
+                      <span className="mx-1.5">·</span>
+                      {settled}
+                    </>
+                  ) : null}
                 </p>
               </div>
-              <p
-                className={cn(
-                  'text-right text-[15px] font-semibold tabular-nums',
-                  Math.abs(row.net) < 0.005 ? 'text-[var(--muted)]' : row.net > 0 ? 'text-[var(--accent)]' : '',
-                )}
-              >
-                {describeBalance(row, trip.baseCurrency)}
-              </p>
+              <div className="text-right">
+                <p className="text-[17px] font-semibold tabular-nums">{formatMoney(row.share, trip.baseCurrency)}</p>
+                <p
+                  className={cn(
+                    'mt-0.5 text-[13px] font-semibold tabular-nums',
+                    Math.abs(row.net) < 0.005 ? 'text-[var(--muted)]' : row.net > 0 ? 'text-[var(--accent)]' : '',
+                  )}
+                >
+                  {describeBalance(row, trip.baseCurrency)}
+                </p>
+              </div>
             </GroupRow>
           )
         })}
       </Group>
+      <p className="mt-2 px-4 text-[13px] text-[var(--muted)]">
+        Splits add up to {formatMoney(spent, trip.baseCurrency)} spent
+      </p>
 
       <p className="px-1 pb-1.5 pt-6 text-[13px] font-normal uppercase tracking-[0.04em] text-[var(--muted)]">
         Suggested payments
@@ -188,6 +156,61 @@ export function BalancesView({
           })}
         </div>
       )}
+
+      <article className="casino-felt relative mt-6 overflow-hidden rounded-[28px] px-4 pb-5 pt-6 text-[#f4e7c3] sm:px-6">
+        <span className="absolute left-4 top-4 text-[16px] text-[#d4af37]/70">♠</span>
+        <span className="absolute right-4 top-4 text-[16px] text-[#d4af37]/70">♦</span>
+        <p className="text-center text-[11px] font-semibold uppercase tracking-[0.34em] text-[#d4af37]">
+          The TripTab Club
+        </p>
+        <h2 className="casino-serif mt-2 text-center text-[34px] leading-none tracking-tight text-[#f6e7b2] sm:text-[40px]">
+          High Rollers
+        </h2>
+        <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">Who covered the bills — not their split.</p>
+
+        {ranked.length === 0 ? (
+          <p className="mt-8 pb-4 text-center text-[15px] text-[#d9c48a]/70">Add friends to open the table.</p>
+        ) : (
+          <>
+            <div className="mt-5 flex items-end justify-center gap-3 sm:gap-5">
+              {second ? <PodiumSeat place={2} person={second.person} paid={second.paid} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
+              {first ? <PodiumSeat place={1} person={first.person} paid={first.paid} currency={trip.baseCurrency} /> : null}
+              {third ? <PodiumSeat place={3} person={third.person} paid={third.paid} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
+            </div>
+
+            <ol className="mt-4 space-y-0.5">
+              {ranked.map((row, index) => (
+                <li
+                  key={row.personId}
+                  className="flex items-center gap-3 rounded-[14px] px-2 py-1.5"
+                >
+                  <span className="w-7 text-center font-semibold tabular-nums text-[#d4af37]/80">
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <Avatar person={row.person} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[16px] font-semibold text-[#f7efd2]">{row.person.name}</p>
+                    <p className={cn('truncate text-[12px]', index === 0 ? 'font-semibold tracking-wide text-[#d4af37]' : 'text-[#cbb98a]/75')}>
+                      {titleForRank(index, row.paid)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[15px] font-semibold tabular-nums text-[#f6e7b2]">
+                      {formatMoney(row.paid, trip.baseCurrency)}
+                    </p>
+                    <p className="text-[11px] tabular-nums text-[#d4af37]/70">
+                      split {formatMoney(row.share, trip.baseCurrency)}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <p className="mt-3 text-center text-[11px] uppercase tracking-[0.18em] text-[#d4af37]/55">
+              ♣ Ranked by bills paid · split is their cut ♣
+            </p>
+          </>
+        )}
+      </article>
     </div>
   )
 }

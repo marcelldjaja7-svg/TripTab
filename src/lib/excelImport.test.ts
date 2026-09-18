@@ -88,6 +88,37 @@ describe('excel import', () => {
     const coffee = result.trip.expenses[0]!
     expect(coffee.currency).toBe('USD')
     expect(result.trip.people.find((p) => p.id === coffee.paidBy)?.name).toBe('Riley')
+    expect(coffee.participantIds).toEqual([coffee.paidBy])
+  })
+
+  it('does not add the payer to a bill that is only for someone else', async () => {
+    const filled = workbookXlsx([
+      {
+        name: 'Expenses',
+        rows: [
+          [...IMPORT_HEADERS],
+          ['2026-09-17', 'Treat', 100, 'USD', 'Alex', 'Sam', 'Food'],
+        ],
+      },
+    ])
+    const result = await importTripExcel({ ...trip(), expenses: [] }, filled)
+    const bill = result.trip.expenses[0]
+    expect(bill?.paidBy).toBe('a')
+    expect(bill?.participantIds).toEqual(['b'])
+  })
+
+  it('reads a Participant header from an exported sheet', async () => {
+    const filled = workbookXlsx([
+      {
+        name: 'Expenses',
+        rows: [
+          ['Date', 'Note', 'Amount', 'Currency', 'Paid by', 'Participant', 'Category', 'Split'],
+          ['2026-09-17', 'Steam', 244, 'DKK', 'Alex', 'Alex', 'Food', 'equal'],
+        ],
+      },
+    ])
+    const result = await importTripExcel({ ...trip(), expenses: [] }, filled)
+    expect(result.trip.expenses[0]?.participantIds).toEqual(['a'])
   })
 
   it('re-imports an exported trip workbook', async () => {
