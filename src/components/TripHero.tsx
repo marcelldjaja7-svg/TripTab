@@ -70,7 +70,7 @@ export function TripHero({
           )}
           {trip.shareId ? (
             <span className="rounded-full bg-emerald-400/20 px-2.5 py-1 text-[12px] font-semibold text-emerald-100 ring-1 ring-emerald-300/30">
-              Live · friends can add expenses
+              Live · updates instantly
             </span>
           ) : trip.isDemo ? (
             <span className="rounded-full bg-black/35 px-2.5 py-1 text-[12px] font-medium text-white/85 ring-1 ring-white/15">

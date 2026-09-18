@@ -58,8 +58,20 @@ function describeNet(b: PersonBalance, currency: string): string {
   return `owes ${formatMoney(-b.net, currency)}`
 }
 
+/** Drop unused FX rates so invite hashes and live pings stay small. */
+export function compactTripForShare(trip: Trip): Trip {
+  const used = new Set<string>([trip.baseCurrency])
+  for (const expense of trip.expenses) used.add(expense.currency)
+  const rates: Record<string, number> = { [trip.baseCurrency]: 1 }
+  for (const code of used) {
+    const n = trip.rates[code]
+    if (typeof n === 'number' && n > 0) rates[code] = n
+  }
+  return { ...trip, rates, isDemo: false }
+}
+
 export function encodeTripShare(trip: Trip): string {
-  const json = JSON.stringify({ ...trip, isDemo: false })
+  const json = JSON.stringify(compactTripForShare(trip))
   const bytes = new TextEncoder().encode(json)
   let binary = ''
   bytes.forEach((b) => {
@@ -81,9 +93,31 @@ export function decodeTripShare(payload: string): Trip | null {
   }
 }
 
+/** Live site friends should open. Localhost invites are unreachable from a phone. */
+export const PUBLIC_APP_URL = 'https://marcelldjaja7-svg.github.io/TripTab/'
+export const PUBLIC_APP_BASE = '/TripTab/'
+const SNAP_QUERY_MAX = 1600
+
+export function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1'
+}
+
+function resolveShareLocation(href?: string, base?: string): { href: string; base: string } {
+  if (href) return { href, base: base ?? import.meta.env.BASE_URL }
+  const current = typeof window !== 'undefined' ? window.location.href : PUBLIC_APP_URL
+  try {
+    const loc = new URL(current)
+    if (isLoopbackHost(loc.hostname)) return { href: PUBLIC_APP_URL, base: PUBLIC_APP_BASE }
+    if (loc.hostname.endsWith('github.io')) return { href: PUBLIC_APP_URL, base: PUBLIC_APP_BASE }
+  } catch {
+    return { href: PUBLIC_APP_URL, base: PUBLIC_APP_BASE }
+  }
+  return { href: current, base: base ?? import.meta.env.BASE_URL }
+}
+
 /** Public app URL with a trailing slash so GitHub Pages invite links resolve. */
 export function canonicalAppUrl(
-  href: string = typeof window !== 'undefined' ? window.location.href : 'http://localhost/',
+  href: string = typeof window !== 'undefined' ? window.location.href : PUBLIC_APP_URL,
   base: string = import.meta.env.BASE_URL,
 ): string {
   const loc = new URL(href)
@@ -121,8 +155,17 @@ export function parseShareLocation(href: string): ParsedShare {
   const hash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
   const hashParams = new URLSearchParams(hash.includes('=') ? hash : '')
   const query = url.searchParams
-  const rawId = query.get('t') || query.get('trip') || hashParams.get('t') || hashParams.get('trip')
-  const payload = hashParams.get('s') || hashParams.get('import') || query.get('s') || query.get('import')
+  let rawId = query.get('t') || query.get('trip') || hashParams.get('t') || hashParams.get('trip')
+  let payload = hashParams.get('s') || hashParams.get('import') || query.get('s') || query.get('import')
+  if (rawId && !payload) {
+    for (const marker of ['#s=', '%23s=']) {
+      const at = rawId.indexOf(marker)
+      if (at === -1) continue
+      payload = rawId.slice(at + marker.length)
+      rawId = rawId.slice(0, at)
+      break
+    }
+  }
   return {
     shareId: rawId && rawId.length > 4 ? rawId : null,
     trip: payload ? decodeTripShare(payload) : null,
@@ -135,11 +178,15 @@ export function shareLinkForTrip(
   href?: string,
   base?: string,
 ): string {
-  const url = new URL(canonicalAppUrl(href, base ?? import.meta.env.BASE_URL))
+  const loc = resolveShareLocation(href, base)
+  const url = new URL(canonicalAppUrl(loc.href, loc.base))
   url.search = ''
   url.hash = ''
   if (shareId) url.searchParams.set('t', shareId)
-  url.hash = `s=${encodeTripShare(trip)}`
+  const snap = encodeTripShare(trip)
+  // Query survives chat apps that drop hashes; keep it short so messengers do not truncate.
+  if (snap.length <= SNAP_QUERY_MAX) url.searchParams.set('s', snap)
+  else url.hash = `s=${snap}`
   return url.toString()
 }
 

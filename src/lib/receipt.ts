@@ -1,3 +1,4 @@
+import { parseExpenseDate } from './dates'
 import { CURRENCY_CODES, DEFAULT_BASE_CURRENCY, getCurrency } from './currencies'
 
 export const VISION_KEY_STORAGE = 'triptab.visionKey'
@@ -168,35 +169,7 @@ export function parseAmountValue(raw: unknown, currency?: string): number | unde
 }
 
 export function parseScanDate(raw: unknown): string | undefined {
-  if (typeof raw !== 'string') return undefined
-  const t = raw.trim()
-  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (iso) return validIso(iso[1], iso[2], iso[3])
-  const dmy = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/)
-  if (dmy) return validIso(dmy[3], dmy[2], dmy[1]) ?? validIso(dmy[3], dmy[1], dmy[2])
-  const mdy = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2})$/)
-  if (mdy) {
-    const year = Number(mdy[3]) < 70 ? 2000 + Number(mdy[3]) : 1900 + Number(mdy[3])
-    return validIso(String(year), mdy[1], mdy[2]) ?? validIso(String(year), mdy[2], mdy[1])
-  }
-  return undefined
-}
-
-function validIso(y: string, m: string, d: string): string | undefined {
-  const year = Number(y)
-  const month = Number(m)
-  const day = Number(d)
-  if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31) return undefined
-  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-  const dt = new Date(`${iso}T12:00:00`)
-  if (Number.isNaN(dt.getTime())) return undefined
-  const today = new Date()
-  const max = new Date(today)
-  max.setDate(max.getDate() + 1)
-  const min = new Date(today)
-  min.setFullYear(min.getFullYear() - 3)
-  if (dt > max || dt < min) return undefined
-  return iso
+  return parseExpenseDate(raw)
 }
 
 export function guessCategoryId(

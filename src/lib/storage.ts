@@ -1,6 +1,7 @@
 import type { AppData, Category, Expense, Person, Trip } from '../types'
 import { CURRENCY_CODES, DEFAULT_BASE_CURRENCY, ratesForBase } from './currencies'
 import { PERSON_COLORS } from './colors'
+import { parseExpenseDate } from './dates'
 import { defaultCategories } from './demo'
 
 export const STORAGE_KEY = 'triptab.v1'
@@ -168,7 +169,7 @@ function normalizeExpense(
     splitMode,
     categoryId,
     note: typeof raw.note === 'string' ? raw.note : '',
-    date: typeof raw.date === 'string' ? raw.date : '',
+    date: parseExpenseDate(raw.date) ?? '',
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined,
   }

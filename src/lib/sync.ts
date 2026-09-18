@@ -6,6 +6,7 @@ import {
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
+import { publishLivePing } from './live'
 import { normalizeTrip } from './storage'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
@@ -87,24 +88,17 @@ function roomPayload(json: RoomBody): { payload?: string; bin?: string; trip?: T
   }
 }
 
-function roomData(trip: Trip, bin?: string | null) {
-  const payload = encodeTripShare({ ...trip, isDemo: false })
-  return bin ? { payload, bin } : { payload }
-}
-
 export async function createLiveRoom(trip: Trip): Promise<string> {
-  const bin = await postSnapshot(trip)
-  const res = await request(ROOM, {
-    method: 'POST',
-    body: JSON.stringify({ name: 'triptab', data: roomData(trip, bin) }),
-  })
-  if (!res.ok) throw new Error('Could not create a live trip')
-  const json = (await res.json()) as RoomBody
-  if (!json.id) throw new Error('Could not create a live trip')
-  return json.id
+  const shareId =
+    typeof crypto !== 'undefined' && crypto.randomUUID
+      ? `tt${crypto.randomUUID().replace(/-/g, '')}`
+      : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+  await pushLiveTrip(shareId, { ...trip, shareId, isDemo: false })
+  return shareId
 }
 
 export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
+  if (!/^[a-f0-9]{16,}$/i.test(shareId)) return null
   try {
     const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, { method: 'GET' })
     if (!res.ok) return null
@@ -122,22 +116,16 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
-  const bin = await postSnapshot(withId)
-  const res = await request(`${ROOM}/${encodeURIComponent(shareId)}`, {
-    method: 'PUT',
-    body: JSON.stringify({ name: 'triptab', data: roomData(withId, bin) }),
+  await publishLivePing(shareId, withId)
+  void postSnapshot(withId).then((bin) => {
+    if (bin) void publishLivePing(shareId, withId, bin)
   })
-  if (!res.ok) throw new Error('Could not sync trip')
 }
 
 export async function ensureLiveRoom(trip: Trip): Promise<string> {
   if (trip.shareId) {
-    try {
-      await pushLiveTrip(trip.shareId, trip)
-      return trip.shareId
-    } catch {
-      /* room expired — mint a new one so the next invite still syncs */
-    }
+    await pushLiveTrip(trip.shareId, trip)
+    return trip.shareId
   }
   return createLiveRoom(trip)
 }
@@ -233,13 +221,19 @@ export function parseLiveShareId(): string | null {
   return parseShareLocation(window.location.href).shareId
 }
 
-export function setLiveShareHash(shareId: string): void {
+export function setLiveShareHash(shareId: string, trip?: Trip): void {
   const url = new URL(window.location.href)
   url.searchParams.set('t', shareId)
   url.searchParams.delete('trip')
-  url.searchParams.delete('s')
   url.searchParams.delete('import')
   url.hash = ''
+  if (trip) {
+    const snap = encodeTripShare(trip)
+    if (snap.length <= 1600) url.searchParams.set('s', snap)
+    else url.searchParams.delete('s')
+  } else {
+    url.searchParams.delete('s')
+  }
   const next = `${url.pathname}${url.search}`
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
     window.history.replaceState(null, '', next)

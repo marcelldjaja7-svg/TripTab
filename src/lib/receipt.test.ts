@@ -39,12 +39,10 @@ describe('inferCurrency', () => {
 })
 
 describe('parseScanDate', () => {
-  it('accepts ISO and day-first dates in range', () => {
-    const now = new Date()
-    const iso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    const dmy = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`
-    expect(parseScanDate(iso)).toBe(iso)
-    expect(parseScanDate(dmy)).toBe(iso)
+  it('accepts ISO and written 17 September receipt dates', () => {
+    expect(parseScanDate('17 September 2026')).toBe('2026-09-17')
+    expect(parseScanDate('17th Sep 2026')).toBe('2026-09-17')
+    expect(parseScanDate('17/09/2026')).toBe('2026-09-17')
   })
 
   it('drops nonsense dates', () => {

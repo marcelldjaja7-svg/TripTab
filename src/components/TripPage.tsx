@@ -1,5 +1,6 @@
 import { ArrowLeft, Plus, Receipt, Scale, Settings2, Share } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { formatExpenseDate, parseExpenseDate } from '../lib/dates'
 import { EMPTY_FILTER, filterExpenses, isFilterActive, type ExpenseFilter } from '../lib/filter'
 import { convertedLabel, formatMoney, isSettlement, splitLabel, tripTotalBase } from '../lib/money'
 import { cn } from '../lib/utils'
@@ -20,6 +21,20 @@ export function TripPage({ trip }: { trip: Trip }) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
   const [filter, setFilter] = useState<ExpenseFilter>(EMPTY_FILTER)
+  const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set())
+  const seenExpenseIds = useRef<Set<string> | null>(null)
+
+  useEffect(() => {
+    const ids = new Set(trip.expenses.map((e) => e.id))
+    const prev = seenExpenseIds.current
+    seenExpenseIds.current = ids
+    if (!prev) return
+    const added = [...ids].filter((id) => !prev.has(id))
+    if (added.length === 0) return
+    setFlashIds(new Set(added))
+    const handle = window.setTimeout(() => setFlashIds(new Set()), 1600)
+    return () => window.clearTimeout(handle)
+  }, [trip.expenses])
 
   const peopleById = useMemo(() => new Map(trip.people.map((p) => [p.id, p])), [trip.people])
   const cats = useMemo(() => new Map(trip.categories.map((c) => [c.id, c])), [trip.categories])
@@ -31,9 +46,13 @@ export function TripPage({ trip }: { trip: Trip }) {
 
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>()
-    const sorted = [...visibleExpenses].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt)
+    const sorted = [...visibleExpenses].sort(
+      (a, b) =>
+        (parseExpenseDate(b.date) || b.date || '').localeCompare(parseExpenseDate(a.date) || a.date || '') ||
+        b.createdAt - a.createdAt,
+    )
     for (const e of sorted) {
-      const key = e.date || 'Undated'
+      const key = parseExpenseDate(e.date) || e.date || 'Undated'
       const list = map.get(key) ?? []
       list.push(e)
       map.set(key, list)
@@ -155,7 +174,7 @@ export function TripPage({ trip }: { trip: Trip }) {
             ) : (
               grouped.map(([date, items]) => (
                 <section key={date}>
-                  <SectionLabel>{prettyDate(date)}</SectionLabel>
+                  <SectionLabel>{formatExpenseDate(date)}</SectionLabel>
                   <Group>
                     {items.map((expense) => {
                       const payer = peopleById.get(expense.paidBy)
@@ -171,7 +190,7 @@ export function TripPage({ trip }: { trip: Trip }) {
                             setEditing(expense)
                             setFormOpen(true)
                           }}
-                          className="py-3"
+                          className={flashIds.has(expense.id) ? 'row-flash py-3' : 'py-3'}
                         >
                           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-[var(--fill)] text-[18px]">
                             {cat?.emoji ?? '📦'}
@@ -299,10 +318,4 @@ function TabBtn({
       {label}
     </button>
   )
-}
-
-function prettyDate(iso: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso
-  const d = new Date(`${iso}T12:00:00`)
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }
