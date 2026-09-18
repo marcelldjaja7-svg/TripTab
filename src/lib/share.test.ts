@@ -30,15 +30,15 @@ describe('share URLs', () => {
     expect(canonicalAppUrl('http://192.168.1.8:5173/index.html', './')).toBe('http://192.168.1.8:5173/')
   })
 
-  it('packs a live id and a tiny header so the link opens without embedding every bill', () => {
+  it('uses a short public live id with no snapshot in the URL', () => {
     const trip = { ...createDemoTrip(), shareId: 'room-abcde' }
     const href = shareLinkForTrip(trip, trip.shareId, 'https://marcelldjaja7-svg.github.io/TripTab/', '/TripTab/')
     const parsed = parseShareLocation(href)
     expect(parsed.shareId).toBe('room-abcde')
-    expect(parsed.trip?.name).toBe(trip.name)
-    expect(parsed.trip?.expenses).toHaveLength(0)
+    expect(parsed.trip).toBeNull()
+    expect(href).toBe('https://marcelldjaja7-svg.github.io/TripTab/?t=room-abcde')
+    expect(href).not.toContain('s=')
     expect(href).not.toContain('#')
-    expect(href.length).toBeLessThan(1800)
   })
 
   it('still opens legacy #import= snapshot links', () => {
@@ -57,7 +57,8 @@ describe('share URLs', () => {
     expect(href).not.toContain('localhost')
     const parsed = parseShareLocation(href)
     expect(parsed.shareId).toBe('ttroom12345')
-    expect(parsed.trip?.name).toBe(trip.name)
+    expect(parsed.trip).toBeNull()
+    expect(href).toBe('https://marcelldjaja7-svg.github.io/TripTab/?t=ttroom12345')
   })
 
   it('still opens a link when a messenger mashed #s= into the live id', () => {
@@ -69,29 +70,29 @@ describe('share URLs', () => {
     expect(parsed.trip?.name).toBe(trip.name)
   })
 
-  it('reads a snapshot from ?s= so chat apps that drop hashes still open the trip', () => {
+  it('still reads a leftover ?s= snapshot from older app versions', () => {
     const trip = { ...createDemoTrip(), shareId: 'ttqueryroom1', expenses: [] }
-    const href = shareLinkForTrip(
-      trip,
-      trip.shareId,
-      'https://marcelldjaja7-svg.github.io/TripTab/',
-      '/TripTab/',
-    )
-    expect(href).toContain('s=')
-    expect(new URL(href).searchParams.get('s')).toBeTruthy()
+    const href = `https://marcelldjaja7-svg.github.io/TripTab/?t=ttqueryroom1&s=${encodeTripShare(trip)}`
+    expect(parseShareLocation(href).shareId).toBe('ttqueryroom1')
     expect(parseShareLocation(href).trip?.name).toBe(trip.name)
   })
 
-  it('keeps the snapshot after the live hash is stripped', () => {
+  it('keeps the live id after the address bar is stripped', () => {
     resetCapturedShare()
-    const trip = createDemoTrip()
-    const href = shareLinkForTrip(trip, 'dead-room-xxxxx', 'http://localhost:5173/', './')
-    const first = captureShareLocation(href)
-    const later = captureShareLocation('http://localhost:5173/?t=dead-room-xxxxx')
-    expect(first.trip?.name).toBe(trip.name)
-    expect(later.trip?.name).toBe(trip.name)
+    const first = captureShareLocation('https://marcelldjaja7-svg.github.io/TripTab/?t=dead-room-xxxxx')
+    const later = captureShareLocation('https://marcelldjaja7-svg.github.io/TripTab/')
+    expect(first.shareId).toBe('dead-room-xxxxx')
     expect(later.shareId).toBe('dead-room-xxxxx')
     resetCapturedShare()
+  })
+
+  it('shortens the iMessage Copenhagen invite to a live id only', () => {
+    const trip = { ...createDemoTrip(), shareId: 'ff808181a09d98f701a0a308e13e0a73' }
+    const href = shareLinkForTrip(trip, trip.shareId, 'https://marcelldjaja7-svg.github.io/TripTab/', '/TripTab/')
+    expect(href).toBe('https://marcelldjaja7-svg.github.io/TripTab/?t=ff808181a09d98f701a0a308e13e0a73')
+    expect(href).not.toContain('s=')
+    expect(href).not.toContain('#')
+    expect(href.length).toBeLessThan(90)
   })
 
   it('never puts dozens of bills in the invite URL', () => {
@@ -107,10 +108,10 @@ describe('share URLs', () => {
       })),
     }
     const href = shareLinkForTrip(trip, trip.shareId, 'https://marcelldjaja7-svg.github.io/TripTab/', '/TripTab/')
-    expect(href.length).toBeLessThan(1800)
-    expect(href).toContain('t=ttcopenhagen43')
-    expect(href).not.toContain('#s=')
-    expect(parseShareLocation(href).trip?.expenses).toHaveLength(0)
+    expect(href).toBe('https://marcelldjaja7-svg.github.io/TripTab/?t=ttcopenhagen43')
+    expect(href.length).toBeLessThan(80)
+    expect(href).not.toContain('s=')
+    expect(parseShareLocation(href).trip).toBeNull()
     expect(parseShareLocation(href).shareId).toBe('ttcopenhagen43')
   })
 
