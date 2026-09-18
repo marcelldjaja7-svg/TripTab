@@ -123,17 +123,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const first = (await pullLatestLiveTrip(liveId)) ?? (await pullLiveTrip(liveId))
       const waited = await waitForLiveTrip(liveId, 8000)
       const remote = first && waited ? mergeTrips(first, waited) : waited ?? first
-      if (remote) {
-        const localNow =
-          dataRef.current.trips.find((t) => t.shareId === liveId) ?? localMatch ?? usefulSnapshot ?? null
-        const merged = localNow ? mergeTrips(localNow, remote) : remote
+      const localNow =
+        dataRef.current.trips.find((t) => t.shareId === liveId) ?? localMatch ?? usefulSnapshot ?? null
+      const merged = remote && localNow ? mergeTrips(localNow, remote) : remote ?? localNow ?? null
+      if (merged && (remote || localNow)) {
         setData((prev) => {
           const next = { ...prev, ...adoptSharedTrip(prev.trips, merged, liveId) }
           saveAppData(next)
           return next
         })
         setLiveShareHash(liveId)
-        if (shouldPublishLive(merged, remote)) {
+        if (shouldPublishLive(merged, remote ?? null)) {
           void pushLiveTrip(liveId, merged)
         }
         if (!localMatch && !usefulSnapshot) notify('Live trip — everyone on this link can add expenses')
@@ -176,12 +176,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
             }))
           }
-          // Never publish a stale phone over the room if we have not pulled yet.
-          if (remote ? shouldPublishLive(latest, remote) : !firstForRoom && latest.expenses.length > 0) {
+          if (shouldPublishLive(latest, remote)) {
             await pushLiveTrip(shareId, merged)
           }
           setLiveShareHash(shareId)
-          if (remote || !firstForRoom) liveReadyRef.current = shareId
+          liveReadyRef.current = shareId
         } catch {
           /* stay local if the room is briefly unreachable */
         }
