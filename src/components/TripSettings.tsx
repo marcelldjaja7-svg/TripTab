@@ -4,7 +4,8 @@ import { PERSON_COLORS, TRIP_EMOJIS } from '../lib/colors'
 import { convertRatesToNewBase, fetchLiveRates } from '../lib/currencies'
 import { DESTINATIONS } from '../lib/destinations'
 import { liveUpdateLabel } from '../lib/dates'
-import { downloadTripExcel } from '../lib/excel'
+import { downloadImportTemplate, downloadTripExcel } from '../lib/excel'
+import { importTripExcel } from '../lib/excelImport'
 import { loadMyPersonId } from '../lib/identity'
 import { inverseRate, roundTo } from '../lib/money'
 import { downloadJson, shareUrlForTrip, slugify, tripSummaryText } from '../lib/share'
@@ -393,11 +394,54 @@ export function TripSettings({
         </GroupRow>
       </Group>
 
-      <SectionLabel>Export</SectionLabel>
+      <SectionLabel>Excel</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Excel files open in Excel, Numbers, and Google Sheets — including iPhone. JSON is a full backup.
+        Download the template, fill one bill per row, then import. Names should match Friends. You can also import a
+        file you already exported.
       </p>
       <Group>
+        <GroupRow
+          onClick={() => {
+            void downloadImportTemplate(trip)
+              .then((how) => {
+                onNotify(
+                  how === 'share' ? 'Template ready — fill Expenses, then import' : 'Template downloaded',
+                )
+              })
+              .catch(() => onNotify('Could not download the template'))
+          }}
+        >
+          <Download size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Download Excel template</span>
+        </GroupRow>
+        <label className="row-sep relative flex min-h-[44px] w-full cursor-pointer items-center gap-3 px-4 py-2.5">
+          <Upload size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Import Excel</span>
+          <input
+            type="file"
+            accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (!file) return
+              try {
+                const csv = /\.csv$/i.test(file.name) || file.type.includes('csv')
+                const input = csv ? await file.text() : new Uint8Array(await file.arrayBuffer())
+                const result = await importTripExcel(trip, input)
+                if (result.added === 0) {
+                  onNotify(result.warnings[0] ?? 'No new bills in that file')
+                  return
+                }
+                onChange(result.trip)
+                const extra = result.skipped ? ` · ${result.skipped} skipped` : ''
+                onNotify(`Added ${result.added} bill${result.added === 1 ? '' : 's'} from Excel${extra}`)
+              } catch {
+                onNotify('Could not read that Excel file. Use the template.')
+              }
+            }}
+          />
+        </label>
         <GroupRow
           onClick={() => {
             void downloadTripExcel(trip)
@@ -414,6 +458,13 @@ export function TripSettings({
           <FileSpreadsheet size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
           <span className="flex-1 text-[17px]">Export to Excel</span>
         </GroupRow>
+      </Group>
+
+      <SectionLabel>Export</SectionLabel>
+      <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
+        JSON is a full backup if you need to import later.
+      </p>
+      <Group>
         <GroupRow onClick={() => void copySummary()}>
           <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
           <span className="flex-1 text-[17px]">Copy Summary</span>
