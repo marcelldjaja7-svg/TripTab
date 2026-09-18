@@ -6,7 +6,7 @@ import {
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
-import { publishLivePing } from './live'
+import { PING_MAX, publishLivePing } from './live'
 import { normalizeTrip } from './storage'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
@@ -116,6 +116,12 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
+  const encoded = encodeTripShare(withId)
+  if (encoded.length > PING_MAX) {
+    const bin = await postSnapshot(withId)
+    await publishLivePing(shareId, withId, bin)
+    return
+  }
   await publishLivePing(shareId, withId)
   void postSnapshot(withId).then((bin) => {
     if (bin) void publishLivePing(shareId, withId, bin)
@@ -139,8 +145,8 @@ export function mergeTrips(local: Trip, remote: Trip): Trip {
   const older = newer === local ? remote : local
   const deleted = new Set([...(local.deletedExpenseIds ?? []), ...(remote.deletedExpenseIds ?? [])])
 
-  const expenses = byId(older.expenses)
-  for (const expense of newer.expenses) {
+  const expenses = byId(local.expenses)
+  for (const expense of remote.expenses) {
     const prev = expenses.get(expense.id)
     if (!prev) {
       expenses.set(expense.id, expense)
