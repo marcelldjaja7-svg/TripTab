@@ -1,6 +1,6 @@
 import { ArrowLeft, Plus, Receipt, Scale, Settings2, Share } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { formatExpenseDate, parseExpenseDate } from '../lib/dates'
+import { formatExpenseDate, liveUpdateLabel, parseExpenseDate } from '../lib/dates'
 import { EMPTY_FILTER, filterExpenses, isFilterActive, type ExpenseFilter } from '../lib/filter'
 import { convertedLabel, formatMoney, isSettlement, splitLabel, tripTotalBase } from '../lib/money'
 import { cn } from '../lib/utils'
@@ -23,6 +23,12 @@ export function TripPage({ trip }: { trip: Trip }) {
   const [filter, setFilter] = useState<ExpenseFilter>(EMPTY_FILTER)
   const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set())
   const seenExpenseIds = useRef<Set<string> | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(Date.now()), 15000)
+    return () => window.clearInterval(tick)
+  }, [])
 
   useEffect(() => {
     const ids = new Set(trip.expenses.map((e) => e.id))
@@ -126,6 +132,16 @@ export function TripPage({ trip }: { trip: Trip }) {
           trip={trip}
           onDestinationChange={(destinationId) => saveTrip({ ...trip, destinationId })}
         />
+        {trip.shareId ? (
+          <div className="mt-3 flex items-center gap-2 rounded-[12px] bg-[var(--grouped)] px-4 py-2.5">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+            <p className="min-w-0 flex-1 text-[13px] font-medium">
+              Live
+              <span className="mx-1.5 text-[var(--muted)]">·</span>
+              <span className="text-[var(--muted)]">{liveUpdateLabel(trip, now)}</span>
+            </p>
+          </div>
+        ) : null}
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="rounded-[12px] bg-[var(--grouped)] px-4 py-3">
             <p className="text-[13px] text-[var(--muted)]">{showFiltered ? 'Filtered' : 'Spent'}</p>
@@ -242,6 +258,7 @@ export function TripPage({ trip }: { trip: Trip }) {
 
         {tab === 'settings' && (
           <TripSettings
+            key={trip.id}
             trip={trip}
             onChange={saveTrip}
             onDeleteTrip={() => {

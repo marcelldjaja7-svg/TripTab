@@ -21,6 +21,7 @@ import {
   tripFingerprint,
 } from './lib/sync'
 import { uid } from './lib/utils'
+import { saveMyPersonId, stampTripAuthor } from './lib/identity'
 
 type Toast = { id: string; message: string }
 
@@ -46,6 +47,8 @@ type StoreValue = {
   resetAll: () => void
   notify: (message: string) => void
   shareWithFriends: (trip: Trip) => Promise<string>
+  refreshLive: (trip: Trip) => Promise<void>
+  setMyPerson: (tripId: string, personId: string) => void
 }
 
 const StoreContext = createContext<StoreValue | null>(null)
@@ -280,6 +283,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             colors.push(color)
             return { id: uid(), name, color }
           })
+        if (trip.people[0]) {
+          saveMyPersonId(trip.id, trip.people[0].id)
+          trip.updatedBy = trip.people[0].id
+          trip.updatedByName = trip.people[0].name
+        }
         setData((d) => ({
           ...d,
           trips: [trip, ...d.trips],
@@ -290,7 +298,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveTrip: (trip) =>
         setData((d) => ({
           ...d,
-          trips: d.trips.map((t) => (t.id === trip.id ? { ...trip, updatedAt: Date.now(), isDemo: false } : t)),
+          trips: d.trips.map((t) => (t.id === trip.id ? { ...stampTripAuthor(trip), isDemo: false } : t)),
         })),
       deleteTrip: (id) =>
         setData((d) => {
@@ -338,7 +346,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       notify,
       shareWithFriends: async (trip) => {
         const shareId = trip.shareId || mintLiveShareId()
-        const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
+        const next = { ...stampTripAuthor(trip), shareId, isDemo: false }
         setData((d) => ({
           ...d,
           trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
@@ -386,6 +394,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             : 'Invite copied — friends can open the trip on their phones.',
         )
         return url
+      },
+      refreshLive: async (trip) => {
+        if (!trip.shareId) {
+          notify('Start a live trip first')
+          return
+        }
+        try {
+          const remote = await pullLatestLiveTrip(trip.shareId)
+          const latest = dataRef.current.trips.find((t) => t.id === trip.id) ?? trip
+          const merged = remote ? mergeTrips(latest, remote) : latest
+          await pushLiveTrip(trip.shareId, merged)
+          setLiveShareHash(trip.shareId, merged)
+          setData((prev) => ({
+            ...prev,
+            trips: prev.trips.map((t) =>
+              t.id === latest.id ? { ...merged, id: latest.id, shareId: trip.shareId } : t,
+            ),
+          }))
+          notify(remote ? 'Synced with the group' : 'Your bills are live — waiting for friends')
+        } catch {
+          notify('Could not reach live sync right now')
+        }
+      },
+      setMyPerson: (tripId, personId) => {
+        saveMyPersonId(tripId, personId)
       },
     }
   }, [data, toast, currentTrip])

@@ -24,6 +24,7 @@ export type LivePing = {
   fp: string
   at: number
   by: string
+  who?: string
 }
 
 export function liveClientId(): string {
@@ -82,6 +83,7 @@ export function parseLivePing(raw: unknown): LivePing | null {
       fp: ping.fp,
       at: ping.at,
       by: ping.by,
+      who: typeof ping.who === 'string' && ping.who.trim() ? ping.who.trim() : undefined,
     }
   } catch {
     return null
@@ -231,7 +233,14 @@ export async function tripFromPing(ping: LivePing, shareId: string): Promise<Tri
   const fromPayload = ping.p ? decodeTripShare(ping.p) : null
   const fromBin = !fromPayload && ping.bin ? await readLiveSnapshot(ping.bin) : null
   const trip = fromPayload ?? fromBin
-  return trip ? { ...trip, shareId, isDemo: false } : null
+  if (!trip) return null
+  return {
+    ...trip,
+    shareId,
+    isDemo: false,
+    updatedByName: ping.who || trip.updatedByName,
+    updatedAt: Math.max(trip.updatedAt, ping.at),
+  }
 }
 
 function pingFingerprint(trip: Trip): string {
@@ -258,6 +267,7 @@ export async function publishLivePing(shareId: string, trip: Trip, bin?: string 
     fp: pingFingerprint(withId),
     at: Date.now(),
     by: liveClientId(),
+    who: withId.updatedByName,
   }
   const encoded = encodeTripShare(withId)
   ping.p = encoded

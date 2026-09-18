@@ -1,7 +1,9 @@
 import { DESTINATIONS, formatTripDates, resolveDestination } from '../lib/destinations'
+import { liveUpdateLabel } from '../lib/dates'
 import { cn } from '../lib/utils'
 import type { Trip } from '../types'
 import { AvatarStack } from './ui'
+import { useEffect, useState } from 'react'
 
 export function TripHero({
   trip,
@@ -14,6 +16,12 @@ export function TripHero({
   const dates = formatTripDates(trip.startDate, trip.endDate)
   const friends = `${trip.people.length} ${trip.people.length === 1 ? 'friend' : 'friends'}`
   const autoId = resolveDestination({ name: trip.name, emoji: trip.emoji }).id
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const handle = window.setInterval(() => setNow(Date.now()), 15000)
+    return () => window.clearInterval(handle)
+  }, [])
+  const liveLabel = liveUpdateLabel(trip, now)
 
   return (
     <section className="relative isolate overflow-hidden rounded-[28px] text-white shadow-[0_18px_50px_rgba(0,0,0,0.28)]">
@@ -69,8 +77,8 @@ export function TripHero({
             </div>
           )}
           {trip.shareId ? (
-            <span className="rounded-full bg-emerald-400/20 px-2.5 py-1 text-[12px] font-semibold text-emerald-100 ring-1 ring-emerald-300/30">
-              Live · updates instantly
+            <span className="max-w-full rounded-full bg-emerald-400/20 px-2.5 py-1 text-[12px] font-semibold text-emerald-100 ring-1 ring-emerald-300/30">
+              Live · {liveLabel}
             </span>
           ) : trip.isDemo ? (
             <span className="rounded-full bg-black/35 px-2.5 py-1 text-[12px] font-medium text-white/85 ring-1 ring-white/15">

@@ -51,6 +51,9 @@ export type Trip = {
   /** Public room id so friends can add expenses from another phone. */
   shareId?: string
   deletedExpenseIds?: string[]
+  /** Person id of whoever last saved this trip on any phone. */
+  updatedBy?: string
+  updatedByName?: string
 }
 
 export type AppData = {

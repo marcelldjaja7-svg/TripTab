@@ -1,10 +1,11 @@
-import { Download, Map, Plus, Upload } from 'lucide-react'
+import { Download, FileSpreadsheet, Map, Plus, Upload } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { TRIP_EMOJIS } from '../lib/colors'
 import { DEFAULT_BASE_CURRENCY } from '../lib/currencies'
 import { DESTINATIONS, resolveDestination } from '../lib/destinations'
 import { formatMoney, tripTotalBase } from '../lib/money'
 import { downloadJson } from '../lib/share'
+import { allTripsWorkbookXml, downloadExcel } from '../lib/excel'
 import { cn, todayISO } from '../lib/utils'
 import { useStore } from '../state'
 import { ScanSettings } from './ScanSettings'
@@ -125,16 +126,31 @@ export function HomePage() {
           />
         </label>
         {data.trips.length > 0 && (
-          <GroupRow
-            inset
-            onClick={() => downloadJson('triptab-backup.json', { version: 1, trips: data.trips })}
-          >
-            <Glyph className="bg-[var(--accent)]/15 text-[var(--accent)]">
-              <Download size={16} strokeWidth={2} />
-            </Glyph>
-            <span className="flex-1 text-[17px]">Export all</span>
-            <Chevron />
-          </GroupRow>
+          <>
+            <GroupRow
+              inset
+              onClick={() => {
+                downloadExcel('triptab.xls', allTripsWorkbookXml(data.trips))
+                notify('Excel file downloaded')
+              }}
+            >
+              <Glyph className="bg-[#30D158]/15 text-[#30D158]">
+                <FileSpreadsheet size={16} strokeWidth={2} />
+              </Glyph>
+              <span className="flex-1 text-[17px]">Export Excel</span>
+              <Chevron />
+            </GroupRow>
+            <GroupRow
+              inset
+              onClick={() => downloadJson('triptab-backup.json', { version: 1, trips: data.trips })}
+            >
+              <Glyph className="bg-[var(--accent)]/15 text-[var(--accent)]">
+                <Download size={16} strokeWidth={2} />
+              </Glyph>
+              <span className="flex-1 text-[17px]">Export all JSON</span>
+              <Chevron />
+            </GroupRow>
+          </>
         )}
       </Group>
 
