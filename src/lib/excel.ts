@@ -127,6 +127,40 @@ export function unzipStore(buf: Uint8Array): Record<string, string> {
   return out
 }
 
+async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream === 'undefined') throw new Error('deflate')
+  const copy = new Uint8Array(data.byteLength)
+  copy.set(data)
+  const stream = new Blob([copy.buffer]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+/** Read STORE or deflate-raw ZIP entries (Excel/Numbers rewrite templates as deflate). */
+export async function readZip(buf: Uint8Array): Promise<Record<string, Uint8Array>> {
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
+  const decoder = new TextDecoder()
+  const out: Record<string, Uint8Array> = {}
+  let i = 0
+  while (i + 30 <= buf.length && view.getUint32(i, true) === 0x04034b50) {
+    const flags = view.getUint16(i + 6, true)
+    const method = view.getUint16(i + 8, true)
+    const compressed = view.getUint32(i + 18, true)
+    const nameLen = view.getUint16(i + 26, true)
+    const extraLen = view.getUint16(i + 28, true)
+    const nameStart = i + 30
+    const name = decoder.decode(buf.subarray(nameStart, nameStart + nameLen)).replace(/\\/g, '/')
+    const dataStart = nameStart + nameLen + extraLen
+    if ((flags & 0x8) !== 0) throw new Error('unsupported zip')
+    const packed = buf.subarray(dataStart, dataStart + compressed)
+    let data: Uint8Array = packed
+    if (method === 8) data = await inflateRaw(packed)
+    else if (method !== 0) throw new Error(`zip method ${method}`)
+    out[name] = data
+    i = dataStart + compressed
+  }
+  return out
+}
+
 function xml(value: string): string {
   let out = ''
   for (const ch of value) {
@@ -358,8 +392,45 @@ export async function downloadExcel(filename: string, bytes: Uint8Array): Promis
   return 'download'
 }
 
+export const IMPORT_HEADERS = ['Date', 'Note', 'Amount', 'Currency', 'Paid by', 'Split between', 'Category'] as const
+
+export function tripImportTemplateXlsx(trip: Trip): Uint8Array {
+  const expenses: Cell[][] = [[...IMPORT_HEADERS]]
+  for (let i = 0; i < 12; i++) expenses.push(IMPORT_HEADERS.map(() => ''))
+  const friends: Cell[][] = [['Name'], ...trip.people.map((person) => [person.name])]
+  const categories: Cell[][] = [
+    ['Name'],
+    ...trip.categories.filter((c) => c.id !== 'settlement').map((c) => [c.name]),
+  ]
+  const how: Cell[][] = [
+    ['TripTab Excel import'],
+    [''],
+    ['1. Open the Expenses sheet. Keep the header row as-is.'],
+    ['2. Type one bill per row.'],
+    ['3. Date as YYYY-MM-DD, for example 2026-09-18.'],
+    [`4. Amount is what was paid. Leave Currency blank to use ${trip.baseCurrency}.`],
+    ['5. Paid by must be a name from the Friends sheet, or a new name we will add.'],
+    ['6. Split between is optional. Comma-separated names. Blank = everyone on the trip.'],
+    ['7. Category should match the Categories sheet. Blank = Other.'],
+    ['8. Save the file, then tap Import Excel in this trip.'],
+    [''],
+    [`Trip: ${trip.name}`],
+    [`Friends: ${trip.people.map((p) => p.name).join(', ') || '(add friends first)'}`],
+  ]
+  return workbookXlsx([
+    { name: 'Instructions', rows: how },
+    { name: 'Expenses', rows: expenses },
+    { name: 'Friends', rows: friends },
+    { name: 'Categories', rows: categories },
+  ])
+}
+
 export function downloadTripExcel(trip: Trip): Promise<'share' | 'download'> {
   return downloadExcel(`${slugify(trip.name)}.xlsx`, tripWorkbookXlsx(trip))
+}
+
+export function downloadImportTemplate(trip: Trip): Promise<'share' | 'download'> {
+  return downloadExcel(`${slugify(trip.name)}-template.xlsx`, tripImportTemplateXlsx(trip))
 }
 
 export function downloadAllTripsExcel(trips: Trip[]): Promise<'share' | 'download'> {
