@@ -33,17 +33,20 @@ async function request(url: string, init: RequestInit, timeoutMs = TIMEOUT_MS): 
 }
 
 async function postSnapshot(trip: Trip): Promise<string | null> {
-  try {
-    const res = await request(`${SNAPSHOT}/post`, {
-      method: 'POST',
-      body: JSON.stringify({ ...trip, isDemo: false }),
-    })
-    if (!res.ok) return null
-    const json = (await res.json()) as { key?: string }
-    return json.key && json.key.length > 3 ? json.key : null
-  } catch {
-    return null
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await request(`${SNAPSHOT}/post`, {
+        method: 'POST',
+        body: JSON.stringify({ ...trip, isDemo: false }),
+      })
+      if (!res.ok) continue
+      const json = (await res.json()) as { key?: string }
+      if (json.key && json.key.length > 3) return json.key
+    } catch {
+      /* retry — live trips must not be capped by a single failed snapshot */
+    }
   }
+  return null
 }
 
 async function readSnapshot(bin: string): Promise<Trip | null> {
@@ -124,15 +127,13 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {
   const withId = { ...trip, shareId, isDemo: false }
   const encoded = encodeTripShare(withId)
-  if (encoded.length > PING_MAX) {
-    const bin = await postSnapshot(withId)
-    await publishLivePing(shareId, withId, bin)
+  const bin = await postSnapshot(withId)
+  if (encoded.length > PING_MAX && !bin) {
+    const retry = await postSnapshot(withId)
+    await publishLivePing(shareId, withId, retry)
     return
   }
-  await publishLivePing(shareId, withId)
-  void postSnapshot(withId).then((bin) => {
-    if (bin) void publishLivePing(shareId, withId, bin)
-  })
+  await publishLivePing(shareId, withId, bin)
 }
 
 export async function ensureLiveRoom(trip: Trip): Promise<string> {

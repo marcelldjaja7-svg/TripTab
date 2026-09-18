@@ -199,7 +199,7 @@ describe('live room payload', () => {
     expect(urls.some((url) => url.includes('ntfy'))).toBe(true)
   })
 
-  it('waits for a snapshot key before pinging when the trip is too big for ntfy', async () => {
+  it('stores a full snapshot before pinging so a trip can hold any number of bills', async () => {
     const fat = trip({
       name: 'Huge scan dump',
       people: [{ id: 'a', name: 'A', color: '#000' }],

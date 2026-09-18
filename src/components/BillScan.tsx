@@ -2,7 +2,6 @@ import { Camera, ImageIcon, LoaderCircle, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { formatMoney } from '../lib/money'
 import { loadVisionKey, ScanError, scanReceiptPhoto, type ReceiptScan } from '../lib/receipt'
-import { cn } from '../lib/utils'
 import type { Trip } from '../types'
 import { Group, GroupRow } from './ui'
 
@@ -165,9 +164,18 @@ export function ScanLines({
 }) {
   if (items.length === 0) return null
   return (
-    <p className={cn('px-1 text-[13px] text-[var(--muted)]')}>
-      Seen on the bill:{' '}
-      {items.map((item) => `${item.name} ${formatMoney(item.amount, currency)}`).join(' · ')}
-    </p>
+    <div className="max-h-52 overflow-y-auto rounded-[12px] bg-[var(--grouped)] px-4 py-3">
+      <p className="text-[13px] text-[var(--muted)]">
+        Seen on the bill · {items.length} {items.length === 1 ? 'line' : 'lines'}
+      </p>
+      <ul className="mt-1 space-y-1">
+        {items.map((item, index) => (
+          <li key={`${item.name}-${index}`} className="flex items-baseline justify-between gap-3 text-[15px]">
+            <span className="min-w-0 break-words">{item.name}</span>
+            <span className="shrink-0 tabular-nums text-[var(--muted)]">{formatMoney(item.amount, currency)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }

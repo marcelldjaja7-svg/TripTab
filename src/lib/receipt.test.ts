@@ -87,6 +87,20 @@ describe('normalizeReceiptScan', () => {
     expect(scan.currency).toBe('IDR')
     expect(scan.amount).toBe(20)
   })
+
+  it('keeps every line from a long receipt instead of capping at 8', () => {
+    const lineItems = Array.from({ length: 24 }, (_, i) => ({
+      name: `Item ${i + 1}`,
+      amount: (i + 1) * 1000,
+    }))
+    const scan = normalizeReceiptScan(
+      { amount: 300000, merchant: 'Supermarket', lineItems },
+      { baseCurrency: 'IDR', categories: cats },
+    )
+    expect(scan.lineItems).toHaveLength(24)
+    expect(scan.lineItems?.[0]?.name).toBe('Item 1')
+    expect(scan.lineItems?.[23]?.name).toBe('Item 24')
+  })
 })
 
 describe('extractJsonObject', () => {
