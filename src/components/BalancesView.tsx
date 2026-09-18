@@ -1,7 +1,7 @@
 import { ArrowUpRight, Check, Copy, Crown } from 'lucide-react'
 import { formatMoney } from '../lib/money'
 import { describeTransfer } from '../lib/share'
-import { computeBalances, describeBalance, personSpendPaid, settlementExpense, suggestedTransfers } from '../lib/settle'
+import { computeBalances, describeBalance, personTripShare, settlementExpense, suggestedTransfers } from '../lib/settle'
 import { cn } from '../lib/utils'
 import type { Person, Trip } from '../types'
 import { Avatar, Button, Group, GroupRow, SectionLabel } from './ui'
@@ -23,15 +23,15 @@ export function BalancesView({
   onLogSettlement: (next: Trip) => void
 }) {
   const balances = [...computeBalances(trip)].sort((a, b) => {
-    const paidA = personSpendPaid(trip, a.personId)
-    const paidB = personSpendPaid(trip, b.personId)
-    return paidB - paidA
+    const shareA = personTripShare(trip, a.personId)
+    const shareB = personTripShare(trip, b.personId)
+    return shareB - shareA || b.paid - a.paid
   })
   const transfers = suggestedTransfers(trip)
   const ranked = balances
     .map((b) => {
       const person = trip.people.find((p) => p.id === b.personId)
-      return person ? { ...b, person, paid: personSpendPaid(trip, b.personId) } : null
+      return person ? { ...b, person, amount: personTripShare(trip, b.personId) } : null
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row))
   const podium = ranked.slice(0, 3)
@@ -50,16 +50,16 @@ export function BalancesView({
         <h2 className="casino-serif mt-2 text-center text-[34px] leading-none tracking-tight text-[#f6e7b2] sm:text-[40px]">
           High Rollers
         </h2>
-        <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">The friends picking up the tab.</p>
+        <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">Each friend's share — paid and settled.</p>
 
         {ranked.length === 0 ? (
           <p className="mt-8 pb-4 text-center text-[15px] text-[#d9c48a]/70">Add friends to open the table.</p>
         ) : (
           <>
             <div className="mt-5 flex items-end justify-center gap-3 sm:gap-5">
-              {second ? <PodiumSeat place={2} person={second.person} paid={second.paid} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
-              {first ? <PodiumSeat place={1} person={first.person} paid={first.paid} currency={trip.baseCurrency} /> : null}
-              {third ? <PodiumSeat place={3} person={third.person} paid={third.paid} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
+              {second ? <PodiumSeat place={2} person={second.person} amount={second.amount} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
+              {first ? <PodiumSeat place={1} person={first.person} amount={first.amount} currency={trip.baseCurrency} /> : null}
+              {third ? <PodiumSeat place={3} person={third.person} amount={third.amount} currency={trip.baseCurrency} /> : <span className="w-[5.5rem]" />}
             </div>
 
             <ol className="mt-4 space-y-0.5">
@@ -75,17 +75,17 @@ export function BalancesView({
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[16px] font-semibold text-[#f7efd2]">{row.person.name}</p>
                     <p className={cn('truncate text-[12px]', index === 0 ? 'font-semibold tracking-wide text-[#d4af37]' : 'text-[#cbb98a]/75')}>
-                      {titleForRank(index, row.paid)}
+                      {titleForRank(index, row.amount)}
                     </p>
                   </div>
                   <p className="text-right text-[15px] font-semibold tabular-nums text-[#f6e7b2]">
-                    {formatMoney(row.paid, trip.baseCurrency)}
+                    {formatMoney(row.amount, trip.baseCurrency)}
                   </p>
                 </li>
               ))}
             </ol>
             <p className="mt-3 text-center text-[11px] uppercase tracking-[0.18em] text-[#d4af37]/55">
-              ♣ Ranked by bills paid for the group ♣
+              ♣ Ranked by share of the trip ♣
             </p>
           </>
         )}
@@ -192,20 +192,20 @@ export function BalancesView({
   )
 }
 
-function titleForRank(index: number, paid: number): string {
-  if (paid <= 0) return 'Sitting this one out'
+function titleForRank(index: number, amount: number): string {
+  if (amount <= 0) return 'Sitting this one out'
   return ROLLER_TITLES[index] ?? 'At the table'
 }
 
 function PodiumSeat({
   place,
   person,
-  paid,
+  amount,
   currency,
 }: {
   place: 1 | 2 | 3
   person: Person
-  paid: number
+  amount: number
   currency: string
 }) {
   const champion = place === 1
@@ -230,7 +230,7 @@ function PodiumSeat({
         {person.name.trim().charAt(0).toUpperCase() || '?'}
       </div>
       <p className="mt-2 truncate text-center text-[14px] font-semibold text-[#f7efd2]">{person.name}</p>
-      <p className="text-center text-[12px] tabular-nums text-[#d4af37]">{formatMoney(paid, currency)}</p>
+      <p className="text-center text-[12px] tabular-nums text-[#d4af37]">{formatMoney(amount, currency)}</p>
       <div
         className={cn(
           'mt-2 grid w-full place-items-center rounded-t-[12px] font-serif text-[22px] font-semibold text-[#f6e7b2]',

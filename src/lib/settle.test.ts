@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Trip } from '../types'
 import { createDemoTrip, defaultCategories } from './demo'
 import { ratesForBase } from './currencies'
-import { computeBalances, personSpendPaid, settlementExpense, suggestedTransfers } from './settle'
+import { computeBalances, personSpendPaid, personTripShare, settlementExpense, suggestedTransfers } from './settle'
 
 function trip(over: Partial<Trip> & Pick<Trip, 'people' | 'expenses'>): Trip {
   return {
@@ -370,10 +370,70 @@ describe('settle-up payments', () => {
     expect(suggestedTransfers(settled)).toHaveLength(0)
     expect(personSpendPaid(settled, a)).toBeCloseTo(100)
     expect(personSpendPaid(settled, b)).toBeCloseTo(0)
+    expect(personTripShare(settled, a)).toBeCloseTo(50)
+    expect(personTripShare(settled, b)).toBeCloseTo(50)
     const rows = Object.fromEntries(computeBalances(settled).map((row) => [row.personId, row]))
     expect(rows[a]?.paid).toBeCloseTo(100)
     expect(rows[a]?.share).toBeCloseTo(50)
     expect(rows[b]?.paid).toBeCloseTo(0)
     expect(rows[b]?.share).toBeCloseTo(50)
+  })
+
+  it('ranks High Rollers by share so settle-up and splits beat cards swiped', () => {
+    const a = 'a'
+    const b = 'b'
+    const t = trip({
+      people: [
+        { id: a, name: 'engdjaja', color: '#000' },
+        { id: b, name: 'nathanaelsp', color: '#111' },
+      ],
+      expenses: [
+        {
+          id: 'personal',
+          amount: 244,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'Steam',
+          date: '2026-09-17',
+          createdAt: 1,
+        },
+        {
+          id: 'tonkin',
+          amount: 376,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'custom',
+          shares: { [a]: 183, [b]: 193 },
+          categoryId: 'food',
+          note: 'District Tonkin',
+          date: '2026-09-17',
+          createdAt: 2,
+        },
+        {
+          id: 'pay',
+          amount: 193,
+          currency: 'USD',
+          paidBy: b,
+          participantIds: [a],
+          splitMode: 'equal',
+          categoryId: 'settlement',
+          note: 'Settle up',
+          date: '2026-09-18',
+          createdAt: 3,
+        },
+      ],
+    })
+    expect(personSpendPaid(t, a)).toBeCloseTo(620)
+    expect(personSpendPaid(t, b)).toBeCloseTo(0)
+    expect(personTripShare(t, a)).toBeCloseTo(244 + 183)
+    expect(personTripShare(t, b)).toBeCloseTo(193)
+    const ranked = [...computeBalances(t)].sort((x, y) => y.share - x.share)
+    expect(ranked.map((row) => row.personId)).toEqual([a, b])
+    expect(ranked[0]?.share).toBeCloseTo(427)
+    expect(ranked[1]?.share).toBeCloseTo(193)
   })
 })

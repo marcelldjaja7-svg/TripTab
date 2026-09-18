@@ -103,6 +103,11 @@ export function personSpendPaid(trip: Trip, personId: string): number {
   return computeBalances(trip).find((row) => row.personId === personId)?.paid ?? 0
 }
 
+/** This person's split of the trip (equal / custom / percent). After settle-up, that is what they paid toward. */
+export function personTripShare(trip: Trip, personId: string): number {
+  return computeBalances(trip).find((row) => row.personId === personId)?.share ?? 0
+}
+
 export function describeBalance(b: PersonBalance, currency: string): string {
   if (Math.abs(b.net) < 0.005) return 'Settled'
   if (b.net > 0) return `Is owed ${formatMoney(b.net, currency)}`
