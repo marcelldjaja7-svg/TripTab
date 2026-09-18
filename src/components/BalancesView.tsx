@@ -88,12 +88,12 @@ export function BalancesView({
                       {titleForRank(index, row.amount)}
                     </p>
                   </div>
-                  <div className="text-right">
+                  <div className="shrink-0 text-right">
                     <p className="text-[15px] font-semibold tabular-nums text-[#f6e7b2]">
                       {formatMoney(row.amount, trip.baseCurrency)}
                     </p>
                     <p className="text-[11px] tabular-nums text-[#d4af37]/70">
-                      {formatSharePercent(row.amount, spent)} of spend to pay
+                      {formatSharePercent(row.amount, spent)} to pay
                     </p>
                     <p className="text-[11px] tabular-nums text-[#d4af37]/55">
                       {formatSharePercent(row.funded, spent)} have paid
