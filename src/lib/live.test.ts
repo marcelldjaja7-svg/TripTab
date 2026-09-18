@@ -3,6 +3,7 @@ import { ratesForBase } from './currencies'
 import { defaultCategories } from './demo'
 import {
   chunkTripForLive,
+  drainLiveQueue,
   PING_MAX,
   liveSseUrl,
   liveTopic,
@@ -75,9 +76,10 @@ describe('live channel', () => {
   })
 
   it('parses a live ping and ignores keepalives', () => {
-    const ping = parseLivePing({ v: 1, fp: '1', at: 9, by: 'me', p: 'nope', who: 'Alex' })
+    const ping = parseLivePing({ v: 1, fp: '1', at: 9, by: 'me', p: 'nope', who: 'Alex', ids: ['e1', ''] })
     expect(ping?.by).toBe('me')
     expect(ping?.who).toBe('Alex')
+    expect(ping?.ids).toEqual(['e1'])
     expect(parseLivePing({ event: 'open', topic: 'x' })).toBeNull()
   })
 
@@ -273,6 +275,7 @@ describe('live channel', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     await publishLivePing('tt-fat-ping', fat, 'bin-fat')
+    await drainLiveQueue('tt-fat-ping')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('ntfy'))).toBe(true)
   })
 
@@ -294,6 +297,7 @@ describe('live channel', () => {
           by: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
           who: '45 bills',
           n: 45,
+          ids: chunk.expenses.map((expense) => expense.id),
         }).length,
       ).toBeLessThanOrEqual(PING_MAX)
     }
@@ -328,6 +332,7 @@ describe('live channel', () => {
       }),
     )
     await publishLivePing('tt-chunk-45', fat)
+    await drainLiveQueue('tt-chunk-45')
     expect(posts.length).toBeGreaterThan(1)
     const trip = await pullLatestLiveTrip('tt-chunk-45')
     expect(trip?.expenses).toHaveLength(45)
@@ -366,12 +371,50 @@ describe('live channel', () => {
       }),
     )
     await publishLivePing('tt-chunk-union', phone)
+    await drainLiveQueue('tt-chunk-union')
     await publishLivePing('tt-chunk-union', laptop)
+    await drainLiveQueue('tt-chunk-union')
     const trip = await pullLatestLiveTrip('tt-chunk-union')
     const ids = new Set(trip?.expenses.map((e) => e.id))
     expect(ids.has('phone-44')).toBe(true)
     expect(ids.has('laptop-46')).toBe(true)
     expect(trip?.expenses).toHaveLength(48)
+  })
+
+  it('retries a 429 ntfy post so every bill still reconstructs', async () => {
+    const fat = withBills(45, 9)
+    fat.updatedByName = 'friend'
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Logged receipt ${i} ${'x'.repeat(80)}`,
+    }))
+    let ntfyPosts = 0
+    const bodies: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('ntfy') && method === 'POST') {
+          ntfyPosts += 1
+          const body = String(init?.body ?? '')
+          expect(body.length).toBeLessThanOrEqual(PING_MAX)
+          if (ntfyPosts === 1) return new Response('rate limited', { status: 429 })
+          bodies.push(body)
+          return new Response('ok', { status: 200 })
+        }
+        if (url.includes('/json')) {
+          const lines = bodies.map((row) => JSON.stringify({ event: 'message', message: row }))
+          return new Response(lines.join('\n'), { status: 200 })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    await publishLivePing('tt-retry-429', fat)
+    await drainLiveQueue('tt-retry-429')
+    expect(ntfyPosts).toBeGreaterThan(1)
+    const trip = await pullLatestLiveTrip('tt-retry-429')
+    expect(trip?.expenses).toHaveLength(45)
   })
 
   it('still delivers a later snapshot ping after an empty fingerprint ping', async () => {
