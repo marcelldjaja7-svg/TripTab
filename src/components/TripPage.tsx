@@ -2,7 +2,7 @@ import { ArrowLeft, Plus, Receipt, Scale, Settings2, Share } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { formatExpenseDate, liveUpdateLabel, parseExpenseDate } from '../lib/dates'
 import { EMPTY_FILTER, filterExpenses, isFilterActive, type ExpenseFilter } from '../lib/filter'
-import { convertedLabel, formatMoney, isSettlement, splitLabel, tripTotalBase } from '../lib/money'
+import { convertedLabel, formatMoney, isSettlement, splitLabel, tripBillCount, tripPaymentExpenses, tripTotalBase } from '../lib/money'
 import { cn } from '../lib/utils'
 import { useStore } from '../state'
 import type { Expense, Trip } from '../types'
@@ -48,7 +48,9 @@ export function TripPage({ trip }: { trip: Trip }) {
   const filtering = isFilterActive(filter)
   const showFiltered = tab === 'expenses' && filtering
   const spent = tripTotalBase(trip, showFiltered ? visibleExpenses : trip.expenses)
-  const loggedCount = showFiltered ? visibleExpenses.length : trip.expenses.length
+  const loggedCount = tripBillCount(trip, showFiltered ? visibleExpenses : trip.expenses)
+  const paymentCount = tripPaymentExpenses(trip, showFiltered ? visibleExpenses : trip.expenses).length
+  const showingPaymentsOnly = showFiltered && loggedCount === 0 && paymentCount > 0
 
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>()
@@ -152,9 +154,15 @@ export function TripPage({ trip }: { trip: Trip }) {
           <div className="rounded-[12px] bg-[var(--grouped)] px-4 py-3">
             <p className="text-[13px] text-[var(--muted)]">{showFiltered ? 'Showing' : 'Logged'}</p>
             <p className="mt-0.5 text-[22px] font-semibold tracking-tight">
-              {loggedCount} {loggedCount === 1 ? 'bill' : 'bills'}
-              {showFiltered ? ` of ${trip.expenses.length}` : ''}
+              {showingPaymentsOnly
+                ? `${paymentCount} ${paymentCount === 1 ? 'payment' : 'payments'}`
+                : `${loggedCount} ${loggedCount === 1 ? 'bill' : 'bills'}${showFiltered ? ` of ${tripBillCount(trip)}` : ''}`}
             </p>
+            {!showFiltered && paymentCount > 0 ? (
+              <p className="mt-0.5 text-[12px] text-[var(--muted)]">
+                {paymentCount} settle-up {paymentCount === 1 ? 'payment' : 'payments'}
+              </p>
+            ) : null}
           </div>
         </div>
         {tab === 'expenses' && trip.expenses.length > 0 && (

@@ -3,7 +3,7 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { TRIP_EMOJIS } from '../lib/colors'
 import { DEFAULT_BASE_CURRENCY } from '../lib/currencies'
 import { DESTINATIONS, resolveDestination } from '../lib/destinations'
-import { formatMoney, tripTotalBase } from '../lib/money'
+import { formatMoney, tripBillCount, tripTotalBase } from '../lib/money'
 import { downloadJson } from '../lib/share'
 import { downloadAllTripsExcel } from '../lib/excel'
 import { cn, todayISO } from '../lib/utils'
@@ -97,7 +97,7 @@ export function HomePage() {
                     {formatMoney(tripTotalBase(trip), trip.baseCurrency)}
                   </span>
                   <span className="text-[12px] text-[var(--muted)]">
-                    {trip.expenses.length} {trip.expenses.length === 1 ? 'expense' : 'expenses'}
+                    {tripBillCount(trip)} {tripBillCount(trip) === 1 ? 'expense' : 'expenses'}
                   </span>
                 </span>
                 <Chevron />

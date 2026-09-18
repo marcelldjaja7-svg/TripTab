@@ -1,7 +1,7 @@
 import { ArrowUpRight, Check, Copy, Crown } from 'lucide-react'
 import { formatMoney } from '../lib/money'
 import { describeTransfer } from '../lib/share'
-import { computeBalances, settlementExpense, suggestedTransfers } from '../lib/settle'
+import { computeBalances, personSpendPaid, settlementExpense, suggestedTransfers } from '../lib/settle'
 import { cn } from '../lib/utils'
 import type { Person, Trip } from '../types'
 import { Avatar, Button } from './ui'
@@ -22,12 +22,16 @@ export function BalancesView({
   trip: Trip
   onLogSettlement: (next: Trip) => void
 }) {
-  const balances = [...computeBalances(trip)].sort((a, b) => b.paid - a.paid)
+  const balances = [...computeBalances(trip)].sort((a, b) => {
+    const paidA = personSpendPaid(trip, a.personId)
+    const paidB = personSpendPaid(trip, b.personId)
+    return paidB - paidA
+  })
   const transfers = suggestedTransfers(trip)
   const ranked = balances
     .map((b) => {
       const person = trip.people.find((p) => p.id === b.personId)
-      return person ? { ...b, person } : null
+      return person ? { ...b, person, paid: personSpendPaid(trip, b.personId) } : null
     })
     .filter((row): row is NonNullable<typeof row> => Boolean(row))
   const podium = ranked.slice(0, 3)
@@ -81,7 +85,7 @@ export function BalancesView({
               ))}
             </ol>
             <p className="mt-3 text-center text-[11px] uppercase tracking-[0.18em] text-[#d4af37]/55">
-              ♣ Ranked by total paid for the group ♣
+              ♣ Ranked by bills paid for the group ♣
             </p>
           </>
         )}
