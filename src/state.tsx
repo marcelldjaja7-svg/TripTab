@@ -382,12 +382,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const mobile = typeof navigator !== 'undefined' && /iPhone|iPad|Android/i.test(navigator.userAgent)
         try {
           if (mobile && navigator.share) {
+            // iMessage concatenates `text` + `url`. Send only the short ?t= link.
             await Promise.race([
-              navigator.share({
-                title: trip.name,
-                text: 'Open this TripTab link to add expenses with the group.',
-                url,
-              }),
+              navigator.share({ title: trip.name, url }),
               new Promise((_, reject) => window.setTimeout(() => reject(new Error('share')), 1500)),
             ])
           }

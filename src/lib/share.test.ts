@@ -86,6 +86,15 @@ describe('share URLs', () => {
     resetCapturedShare()
   })
 
+  it('shortens the iMessage Copenhagen invite to a live id only', () => {
+    const trip = { ...createDemoTrip(), shareId: 'ff808181a09d98f701a0a308e13e0a73' }
+    const href = shareLinkForTrip(trip, trip.shareId, 'https://marcelldjaja7-svg.github.io/TripTab/', '/TripTab/')
+    expect(href).toBe('https://marcelldjaja7-svg.github.io/TripTab/?t=ff808181a09d98f701a0a308e13e0a73')
+    expect(href).not.toContain('s=')
+    expect(href).not.toContain('#')
+    expect(href.length).toBeLessThan(90)
+  })
+
   it('never puts dozens of bills in the invite URL', () => {
     const demo = createDemoTrip()
     const trip = {
