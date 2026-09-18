@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Trip } from '../types'
 import { createDemoTrip, defaultCategories } from './demo'
 import { ratesForBase } from './currencies'
-import { computeBalances, suggestedTransfers } from './settle'
+import { computeBalances, personSpendPaid, settlementExpense, suggestedTransfers } from './settle'
 
 function trip(over: Partial<Trip> & Pick<Trip, 'people' | 'expenses'>): Trip {
   return {
@@ -242,5 +242,43 @@ describe('suggestedTransfers', () => {
     for (const id of Object.keys(nets)) {
       expect(reconstructed[id]).toBeCloseTo(nets[id], 2)
     }
+  })
+})
+
+describe('settle-up payments', () => {
+  it('credits the participants without increasing group spend paid', () => {
+    const a = 'a'
+    const b = 'b'
+    const dinner = trip({
+      people: [
+        { id: a, name: 'A', color: '#000' },
+        { id: b, name: 'B', color: '#111' },
+      ],
+      expenses: [
+        {
+          id: 'e1',
+          amount: 100,
+          currency: 'USD',
+          paidBy: a,
+          participantIds: [a, b],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'Dinner',
+          date: '2026-09-18',
+          createdAt: 1,
+        },
+      ],
+    })
+    expect(suggestedTransfers(dinner)).toMatchObject([{ fromId: b, toId: a, amount: 50 }])
+    const settled = {
+      ...dinner,
+      expenses: [...dinner.expenses, settlementExpense(dinner, b, a, 50)],
+    }
+    const nets = Object.fromEntries(computeBalances(settled).map((row) => [row.personId, row.net]))
+    expect(nets[a]).toBeCloseTo(0)
+    expect(nets[b]).toBeCloseTo(0)
+    expect(suggestedTransfers(settled)).toHaveLength(0)
+    expect(personSpendPaid(settled, a)).toBeCloseTo(100)
+    expect(personSpendPaid(settled, b)).toBeCloseTo(0)
   })
 })

@@ -1,6 +1,6 @@
 import type { Expense, PersonBalance, Transfer, Trip } from '../types'
 import { currencyDecimals } from './currencies'
-import { expenseShares, fromMinor, toBaseMinor } from './money'
+import { expenseShares, fromMinor, isSettlement, toBaseMinor } from './money'
 import { uid } from './utils'
 import { todayISO } from './dates'
 
@@ -58,6 +58,17 @@ export function computeBalances(trip: Trip): PersonBalance[] {
     share: fromMinor(b.share, decimals),
     net: fromMinor(b.net, decimals),
   }))
+}
+
+/** Amount this person paid for group purchases — settle-up transfers do not count. */
+export function personSpendPaid(trip: Trip, personId: string): number {
+  const decimals = currencyDecimals(trip.baseCurrency)
+  let minor = 0
+  for (const expense of trip.expenses) {
+    if (expense.paidBy !== personId || isSettlement(trip, expense)) continue
+    minor += toBaseMinor(expense.amount, expense.currency, trip)
+  }
+  return fromMinor(minor, decimals)
 }
 
 export function suggestedTransfers(trip: Trip): Transfer[] {

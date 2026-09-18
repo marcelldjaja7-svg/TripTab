@@ -158,11 +158,28 @@ export function sharesMatchTotal(
   return toMinor(sharesSum(shares), decimals) === toMinor(total, decimals)
 }
 
+export function isSettlement(trip: Trip, expense: Expense): boolean {
+  const cat = trip.categories.find((c) => c.id === expense.categoryId)
+  return cat?.id === 'settlement' || cat?.name.toLowerCase() === 'settle up'
+}
+
+/** Trip purchases only — settle-up payments are transfers, not spend. */
+export function tripBillExpenses(trip: Trip, expenses: Expense[] = trip.expenses): Expense[] {
+  return expenses.filter((expense) => !isSettlement(trip, expense))
+}
+
+export function tripPaymentExpenses(trip: Trip, expenses: Expense[] = trip.expenses): Expense[] {
+  return expenses.filter((expense) => isSettlement(trip, expense))
+}
+
+export function tripBillCount(trip: Trip, expenses: Expense[] = trip.expenses): number {
+  return tripBillExpenses(trip, expenses).length
+}
+
 export function tripTotalBase(trip: Trip, expenses: Expense[] = trip.expenses): number {
   const decimals = currencyDecimals(trip.baseCurrency)
   let minor = 0
-  for (const expense of expenses) {
-    if (isSettlement(trip, expense)) continue
+  for (const expense of tripBillExpenses(trip, expenses)) {
     minor += toBaseMinor(expense.amount, expense.currency, trip)
   }
   return fromMinor(minor, decimals)
@@ -171,11 +188,6 @@ export function tripTotalBase(trip: Trip, expenses: Expense[] = trip.expenses): 
 export function convertedLabel(trip: Trip, amount: number, currency: string): string {
   const decimals = currencyDecimals(trip.baseCurrency)
   return formatMoney(roundTo(toBase(amount, currency, trip), decimals), trip.baseCurrency)
-}
-
-export function isSettlement(trip: Trip, expense: Expense): boolean {
-  const cat = trip.categories.find((c) => c.id === expense.categoryId)
-  return cat?.id === 'settlement' || cat?.name.toLowerCase() === 'settle up'
 }
 
 export function splitLabel(mode: SplitMode, included: number, totalPeople: number): string {
