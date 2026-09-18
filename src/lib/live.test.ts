@@ -45,8 +45,9 @@ describe('live channel', () => {
   })
 
   it('parses a live ping and ignores keepalives', () => {
-    const ping = parseLivePing({ v: 1, fp: '1', at: 9, by: 'me', p: 'nope' })
+    const ping = parseLivePing({ v: 1, fp: '1', at: 9, by: 'me', p: 'nope', who: 'Alex' })
     expect(ping?.by).toBe('me')
+    expect(ping?.who).toBe('Alex')
     expect(parseLivePing({ event: 'open', topic: 'x' })).toBeNull()
   })
 

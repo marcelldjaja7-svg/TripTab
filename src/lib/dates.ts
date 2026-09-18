@@ -116,6 +116,37 @@ function padIso(year: string, month: string, day: string): string | undefined {
   return iso
 }
 
+export function formatUpdatedAgo(at: number, now = Date.now()): string {
+  if (!Number.isFinite(at) || at <= 0) return ''
+  const s = Math.max(0, Math.round((now - at) / 1000))
+  if (s < 15) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const minutes = Math.round(s / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(at).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+export function liveUpdateLabel(
+  trip: { updatedAt: number; updatedByName?: string },
+  now = Date.now(),
+): string {
+  const when = formatUpdatedAgo(trip.updatedAt, now)
+  const who = trip.updatedByName?.trim()
+  if (who && when) return `Updated by ${who} · ${when}`
+  if (who) return `Updated by ${who}`
+  if (when) return `Updated ${when}`
+  return 'updates instantly'
+}
+
 function clampIso(iso: string | undefined, now: Date): string | undefined {
   if (!iso) return undefined
   const dt = new Date(`${iso}T12:00:00`)

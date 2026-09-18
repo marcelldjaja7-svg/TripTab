@@ -1,8 +1,11 @@
-import { Copy, Download, RefreshCw, Share, Trash2, Upload } from 'lucide-react'
+import { Copy, Download, FileSpreadsheet, RefreshCw, Share, Trash2, Upload, User } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { PERSON_COLORS, TRIP_EMOJIS } from '../lib/colors'
-import { convertRatesToNewBase, CURRENCY_CODES, fetchLiveRates } from '../lib/currencies'
+import { convertRatesToNewBase, fetchLiveRates } from '../lib/currencies'
 import { DESTINATIONS } from '../lib/destinations'
+import { liveUpdateLabel } from '../lib/dates'
+import { downloadTripExcel } from '../lib/excel'
+import { loadMyPersonId } from '../lib/identity'
 import { inverseRate, roundTo } from '../lib/money'
 import { downloadJson, shareUrlForTrip, slugify, tripSummaryText } from '../lib/share'
 import { normalizeAppData, normalizeTrip } from '../lib/storage'
@@ -24,13 +27,15 @@ export function TripSettings({
   onDeleteTrip: () => void
   onNotify: (message: string) => void
 }) {
-  const { shareWithFriends } = useStore()
+  const { shareWithFriends, refreshLive, setMyPerson } = useStore()
   const [fetching, setFetching] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [me, setMe] = useState(() => loadMyPersonId(trip.id) ?? trip.people[0]?.id ?? '')
   const [newFriend, setNewFriend] = useState('')
   const [newCat, setNewCat] = useState('')
 
   const usedCurrencies = Array.from(
-    new Set([trip.baseCurrency, ...trip.expenses.map((e) => e.currency), ...CURRENCY_CODES]),
+    new Set([trip.baseCurrency, ...trip.expenses.map((e) => e.currency)]),
   )
 
   const copySummary = async () => {
@@ -310,7 +315,6 @@ export function TripSettings({
         </GroupRow>
         {usedCurrencies
           .filter((code, i, arr) => arr.indexOf(code) === i && code !== trip.baseCurrency)
-          .slice(0, 18)
           .map((code) => {
             const rate = trip.rates[code] ?? 1
             return (
@@ -336,11 +340,33 @@ export function TripSettings({
       <SectionLabel>Scan bills</SectionLabel>
       <ScanSettings onNotify={onNotify} />
 
-      <SectionLabel>Share with friends</SectionLabel>
+      <SectionLabel>Live sync</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Send a link. Friends open it on any phone — the trip is in the link, so it works even if live sync is briefly down. Anyone with the link can edit.
+        {trip.shareId
+          ? `This trip is live. ${liveUpdateLabel(trip)}. Pick who you are so friends see who added a bill.`
+          : 'Start a live trip to share bills in real time. Pick who you are on this phone first.'}
       </p>
       <Group>
+        <GroupRow className="py-3">
+          <User size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="w-[5.5rem] shrink-0 text-[17px] text-[var(--muted)]">I am</span>
+          <Select
+            className="rounded-none bg-transparent px-0 py-0 text-right dark:bg-transparent"
+            value={me}
+            onChange={(e) => {
+              const id = e.target.value
+              setMe(id)
+              setMyPerson(trip.id, id)
+            }}
+          >
+            {trip.people.length === 0 ? <option value="">Add friends first</option> : null}
+            {trip.people.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </Select>
+        </GroupRow>
         <GroupRow
           onClick={() => {
             void shareWithFriends(trip)
@@ -349,17 +375,45 @@ export function TripSettings({
           <Share size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
           <span className="flex-1 text-[17px]">{trip.shareId ? 'Invite Friends' : 'Start Live Trip'}</span>
         </GroupRow>
-        <GroupRow onClick={() => void copySummary()}>
-          <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
-          <span className="flex-1 text-[17px]">Copy Summary</span>
-        </GroupRow>
+        {trip.shareId ? (
+          <GroupRow
+            onClick={() => {
+              if (syncing) return
+              setSyncing(true)
+              void refreshLive(trip).finally(() => setSyncing(false))
+            }}
+          >
+            <RefreshCw size={16} strokeWidth={1.75} className={cn('text-[var(--accent)]', syncing && 'animate-spin')} />
+            <span className="flex-1 text-[17px]">{syncing ? 'Syncing…' : 'Sync now'}</span>
+          </GroupRow>
+        ) : null}
         <GroupRow onClick={() => void copyLink()}>
           <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
           <span className="flex-1 text-[17px]">Copy Invite Link</span>
         </GroupRow>
+      </Group>
+
+      <SectionLabel>Export</SectionLabel>
+      <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
+        Excel opens on any phone. JSON is a full backup if you need to import later.
+      </p>
+      <Group>
+        <GroupRow
+          onClick={() => {
+            downloadTripExcel(trip)
+            onNotify('Excel file downloaded')
+          }}
+        >
+          <FileSpreadsheet size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Export to Excel</span>
+        </GroupRow>
+        <GroupRow onClick={() => void copySummary()}>
+          <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Copy Summary</span>
+        </GroupRow>
         <GroupRow onClick={() => downloadJson(`${slugify(trip.name)}.triptab.json`, trip)}>
           <Download size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
-          <span className="flex-1 text-[17px]">Download Trip</span>
+          <span className="flex-1 text-[17px]">Download Trip JSON</span>
         </GroupRow>
         <label className="row-sep relative flex min-h-[44px] w-full cursor-pointer items-center gap-3 px-4 py-2.5">
           <Upload size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
