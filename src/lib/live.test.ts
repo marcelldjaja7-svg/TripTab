@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ratesForBase } from './currencies'
 import { defaultCategories } from './demo'
 import {
+  chunkTripForLive,
   PING_MAX,
   liveSseUrl,
   liveTopic,
@@ -14,6 +15,7 @@ import {
   waitForLiveTrip,
 } from './live'
 import { compactTripForShare, decodeTripShare, encodeTripShare } from './share'
+import { mergeTrips } from './merge'
 import type { Expense, Trip } from '../types'
 
 const sample: Trip = {
@@ -272,6 +274,104 @@ describe('live channel', () => {
     vi.stubGlobal('fetch', fetchMock)
     await publishLivePing('tt-fat-ping', fat, 'bin-fat')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('ntfy'))).toBe(true)
+  })
+
+  it('rebuilds a 45-bill trip from live chunks', () => {
+    const fat = withBills(45, 9)
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Logged receipt ${i} ${'x'.repeat(80)}`,
+    }))
+    const chunks = chunkTripForLive(fat)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const [i, chunk] of chunks.entries()) {
+      expect(
+        JSON.stringify({
+          v: 1,
+          p: encodeTripShare(chunk),
+          fp: `${fat.updatedAt}-${fat.expenses.length}-${i}/${chunks.length}`,
+          at: 9_999_999_999_999,
+          by: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+          who: '45 bills',
+          n: 45,
+        }).length,
+      ).toBeLessThanOrEqual(PING_MAX)
+    }
+    const rebuilt = chunks.reduce((acc, chunk) => mergeTrips(acc, chunk))
+    expect(rebuilt.expenses).toHaveLength(45)
+  })
+
+  it('publishes chunks that reconstruct a 45-bill trip without bytebin', async () => {
+    const fat = withBills(45, 9)
+    fat.updatedByName = 'engdjaja'
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Logged receipt ${i} ${'x'.repeat(80)}`,
+    }))
+    const posts: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('ntfy') && method === 'POST') {
+          const body = String(init?.body ?? '')
+          expect(body.length).toBeLessThanOrEqual(PING_MAX)
+          posts.push(body)
+          return new Response('ok', { status: 200 })
+        }
+        if (url.includes('/json')) {
+          const lines = posts.map((body) => JSON.stringify({ event: 'message', message: body }))
+          return new Response(lines.join('\n'), { status: 200 })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    await publishLivePing('tt-chunk-45', fat)
+    expect(posts.length).toBeGreaterThan(1)
+    const trip = await pullLatestLiveTrip('tt-chunk-45')
+    expect(trip?.expenses).toHaveLength(45)
+  })
+
+  it('unions a 45-bill phone with a 47-bill laptop from chunked pings', async () => {
+    const phone = withBills(45, 20)
+    phone.updatedByName = 'engdjaja'
+    phone.expenses = phone.expenses.map((e, i) => ({
+      ...e,
+      id: `phone-${i}`,
+      note: i === 44 ? 'test' : `Phone bill ${i}`,
+    }))
+    const laptop = withBills(47, 10)
+    laptop.updatedByName = 'nathanaelsp'
+    laptop.expenses = laptop.expenses.map((e, i) => ({
+      ...e,
+      id: i < 44 ? `phone-${i}` : `laptop-${i}`,
+      note: `Laptop bill ${i}`,
+    }))
+    const posts: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('ntfy') && method === 'POST') {
+          posts.push(String(init?.body ?? ''))
+          return new Response('ok', { status: 200 })
+        }
+        if (url.includes('/json')) {
+          const lines = posts.map((body) => JSON.stringify({ event: 'message', message: body }))
+          return new Response(lines.join('\n'), { status: 200 })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    await publishLivePing('tt-chunk-union', phone)
+    await publishLivePing('tt-chunk-union', laptop)
+    const trip = await pullLatestLiveTrip('tt-chunk-union')
+    const ids = new Set(trip?.expenses.map((e) => e.id))
+    expect(ids.has('phone-44')).toBe(true)
+    expect(ids.has('laptop-46')).toBe(true)
+    expect(trip?.expenses).toHaveLength(48)
   })
 
   it('still delivers a later snapshot ping after an empty fingerprint ping', async () => {
