@@ -225,10 +225,16 @@ export function setLiveShareHash(shareId: string, trip?: Trip): void {
   const url = new URL(window.location.href)
   url.searchParams.set('t', shareId)
   url.searchParams.delete('trip')
-  url.searchParams.delete('s')
   url.searchParams.delete('import')
-  if (trip) url.hash = `s=${encodeTripShare(trip)}`
-  const next = `${url.pathname}${url.search}${url.hash}`
+  url.hash = ''
+  if (trip) {
+    const snap = encodeTripShare(trip)
+    if (snap.length <= 1600) url.searchParams.set('s', snap)
+    else url.searchParams.delete('s')
+  } else {
+    url.searchParams.delete('s')
+  }
+  const next = `${url.pathname}${url.search}`
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== next) {
     window.history.replaceState(null, '', next)
   }

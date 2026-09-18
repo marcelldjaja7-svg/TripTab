@@ -18,9 +18,9 @@ On your phone on the same Wi‑Fi, you can also use your computer’s LAN addres
 1. Deploy TripTab so it has a public URL. After this repo is on GitHub, turn on **Settings → Pages → GitHub Actions**, merge to `main`, and open:
    `https://marcelldjaja7-svg.github.io/TripTab/`
 2. Create a trip, tap the **share** button (or **Trip → Invite Friends**).
-3. Send that link (it looks like `…/TripTab/?t=…#s=…`). Friends open it on any phone. The trip is packed into the link, so it opens even if live sync is briefly down. When someone adds a bill, it shows up on everyone else’s phone right away. Anyone with the link can edit.
+3. Send that link (it looks like `https://marcelldjaja7-svg.github.io/TripTab/?t=…`). TripTab copies the **public** GitHub Pages URL even if you tapped share on localhost, so friends’ phones can open it. A compact snapshot is packed into the link when it fits, so the trip still opens if live sync is briefly down. When someone adds a bill, it shows up on everyone else’s phone right away. Anyone with the link can edit.
 
-Until the site is deployed, an invite copied from `localhost` only works on this computer.
+Same-Wi‑Fi testing can still use the LAN URL Vite prints; the share button prefers the public site so off-network friends are not sent `localhost`.
 
 Live rooms use a public realtime channel so no account is required. Anyone with the link can edit. If a room expires, the same invite still opens the snapshot in the link — download JSON as a backup.
 

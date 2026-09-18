@@ -14,7 +14,6 @@ import {
   adoptSharedTrip,
   clearLiveShareLocation,
   ensureLiveRoom,
-  isLocalHost,
   mergeTrips,
   pullLiveTrip,
   pushLiveTrip,
@@ -369,11 +368,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         }
         notify(
-          isLocalHost()
-            ? 'Invite ready. Deploy TripTab (GitHub Pages) so friends outside this computer can open it.'
-            : live
-              ? 'Invite link copied — friends can open it and add expenses.'
-              : 'Invite link copied — friends can open the trip on their phones.',
+          live
+            ? 'Invite copied — friends open the public TripTab link and can add expenses.'
+            : 'Invite copied — friends can open the trip on their phones.',
         )
         return url
       },
