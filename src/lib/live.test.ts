@@ -2,15 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ratesForBase } from './currencies'
 import { defaultCategories } from './demo'
 import {
+  PING_MAX,
   liveSseUrl,
   liveTopic,
   parseLivePing,
   pollLivePings,
+  publishLivePing,
+  pullLatestLiveTrip,
   subscribeLivePings,
   tripFromPing,
 } from './live'
 import { compactTripForShare, decodeTripShare, encodeTripShare } from './share'
-import type { Trip } from '../types'
+import type { Expense, Trip } from '../types'
 
 const sample: Trip = {
   id: 't',
@@ -25,6 +28,30 @@ const sample: Trip = {
   updatedAt: 2,
   people: [{ id: 'a', name: 'A', color: '#000' }],
   expenses: [],
+}
+
+function bill(id: string, amount: number): Expense {
+  return {
+    id,
+    amount,
+    currency: 'DKK',
+    paidBy: 'a',
+    participantIds: ['a'],
+    splitMode: 'equal',
+    categoryId: 'food',
+    note: id,
+    date: '2026-09-18',
+    createdAt: amount,
+  }
+}
+
+function withBills(count: number, updatedAt: number): Trip {
+  return {
+    ...sample,
+    updatedAt,
+    updatedByName: `${count} bills`,
+    expenses: Array.from({ length: count }, (_, i) => bill(`e${i}`, i + 1)),
+  }
 }
 
 describe('live channel', () => {
@@ -63,6 +90,48 @@ describe('live channel', () => {
     const trip = await tripFromPing(ping!, 'room1')
     expect(trip?.name).toBe('Copenhagen')
     expect(trip?.shareId).toBe('room1')
+  })
+
+  it('does not treat a republish clock as a newer trip', async () => {
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 99_000,
+      by: 'friend',
+      who: 'Stale phone',
+      p: encodeTripShare({ ...sample, updatedAt: 2, updatedByName: 'engdjaja' }),
+    })
+    const trip = await tripFromPing(ping!, 'room1')
+    expect(trip?.updatedAt).toBe(2)
+    expect(trip?.updatedByName).toBe('engdjaja')
+  })
+
+  it('merges a compact ping payload with the full snapshot', async () => {
+    const compact = withBills(12, 40)
+    const full = withBills(43, 10)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-full-43')) {
+          return new Response(JSON.stringify(full), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 80_000,
+      by: 'friend',
+      p: encodeTripShare(compact),
+      bin: 'bin-full-43',
+    })
+    const trip = await tripFromPing(ping!, 'tt-merge-p-bin')
+    expect(trip?.expenses).toHaveLength(43)
+    expect(trip?.updatedAt).toBe(40)
   })
 
   it('drops unused conversion rates so pings fit in the live channel', () => {
@@ -106,6 +175,51 @@ describe('live channel', () => {
     const pings = await pollLivePings('room1')
     expect(pings).toHaveLength(1)
     expect(pings[0]?.by).toBe('friend')
+  })
+
+  it('unions 12, 30, and 43 bill copies instead of keeping the newest ping', async () => {
+    const pingLine = (trip: Trip, at: number) =>
+      JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: `fp-${at}`, at, by: 'friend', p: encodeTripShare(trip) }),
+      })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('/json')) {
+          return new Response(
+            [pingLine(withBills(43, 50), 1), pingLine(withBills(30, 20), 2), pingLine(withBills(12, 10), 3)].join('\n'),
+            { status: 200 },
+          )
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const trip = await pullLatestLiveTrip('tt-merge-counts')
+    expect(trip?.expenses).toHaveLength(43)
+    expect(trip?.updatedByName).toBe('43 bills')
+  })
+
+  it('never posts an oversized live ping body', async () => {
+    const fat = withBills(40, 9)
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Uploaded receipt ${i} ${'x'.repeat(120)}`,
+    }))
+    expect(encodeTripShare(fat).length).toBeGreaterThan(PING_MAX)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('ntfy') && (init?.method ?? 'GET') === 'POST') {
+        const body = String(init?.body ?? '')
+        expect(body.length).toBeLessThanOrEqual(PING_MAX)
+        const ping = JSON.parse(body) as { p?: string; bin?: string }
+        if (ping.p) expect(decodeTripShare(ping.p)?.expenses.length ?? 0).toBeLessThan(40)
+        return new Response('ok', { status: 200 })
+      }
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await publishLivePing('tt-fat-ping', fat, 'bin-fat')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('ntfy'))).toBe(true)
   })
 
   it('still delivers a later snapshot ping after an empty fingerprint ping', async () => {
