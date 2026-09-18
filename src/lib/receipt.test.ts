@@ -6,6 +6,7 @@ import {
   normalizeReceiptScan,
   parseAmountValue,
   parseScanDate,
+  SCAN_MODELS,
 } from './receipt'
 import { defaultCategories } from './demo'
 
@@ -107,5 +108,13 @@ describe('extractJsonObject', () => {
   it('reads fenced json', () => {
     const json = extractJsonObject('```json\n{"amount": 9}\n```') as { amount: number }
     expect(json.amount).toBe(9)
+  })
+})
+
+describe('Gemini photo scan', () => {
+  it('uses current Flash models instead of shut-down 1.5 / 2.0 ids', () => {
+    expect(SCAN_MODELS[0]).toBe('gemini-flash-latest')
+    expect(SCAN_MODELS.some((model) => model.includes('1.5'))).toBe(false)
+    expect(SCAN_MODELS.some((model) => model.includes('2.0'))).toBe(false)
   })
 })

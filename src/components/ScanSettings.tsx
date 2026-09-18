@@ -1,39 +1,47 @@
-import { useEffect, useState } from 'react'
-import { loadVisionKey, maskVisionKey, saveVisionKey } from '../lib/receipt'
+import { useState } from 'react'
+import {
+  builtInVisionKey,
+  loadVisionKey,
+  maskVisionKey,
+  resolveVisionKey,
+  saveVisionKey,
+  visionKeySource,
+} from '../lib/receipt'
 import { Group, GroupRow, TextInput } from './ui'
 
 export function ScanSettings({ onNotify }: { onNotify?: (message: string) => void }) {
   const [saved, setSaved] = useState(() => loadVisionKey())
   const [draft, setDraft] = useState('')
-
-  useEffect(() => {
-    setSaved(loadVisionKey())
-  }, [])
+  const source = visionKeySource()
+  const connected = Boolean(resolveVisionKey())
 
   const persist = (value: string) => {
     saveVisionKey(value)
     setSaved(value.trim())
     setDraft('')
-    onNotify?.(value.trim() ? 'Scanner key saved on this device' : 'Scanner key removed')
+    onNotify?.(value.trim() ? 'Gemini key saved on this phone' : 'Custom Gemini key removed')
   }
 
   return (
     <>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Optional. Paste a Google Gemini API key to scan receipt photos. Stored only in this browser — never in trip
-        backups or live invite links. The rest of TripTab works without it.
+        {connected
+          ? 'Gemini reads receipt photos when you tap Take Photo or Library on Add Expense. Everyone on this phone can scan.'
+          : 'Paste a Google Gemini API key so Take Photo can read bills. Stored only in this browser — never in trip backups or invite links.'}
       </p>
       <Group>
+        {connected ? (
+          <GroupRow>
+            <span className="flex-1 text-[17px]">Gemini</span>
+            <span className="text-[15px] text-[#30D158]">
+              {source === 'custom' ? `On · ${maskVisionKey(saved)}` : 'Connected'}
+            </span>
+          </GroupRow>
+        ) : null}
         {saved ? (
-          <>
-            <GroupRow>
-              <span className="flex-1 text-[17px]">Key on this phone</span>
-              <span className="text-[15px] tabular-nums text-[var(--muted)]">{maskVisionKey(saved)}</span>
-            </GroupRow>
-            <GroupRow onClick={() => persist('')}>
-              <span className="flex-1 text-[17px] text-[var(--danger)]">Remove key</span>
-            </GroupRow>
-          </>
+          <GroupRow onClick={() => persist('')}>
+            <span className="flex-1 text-[17px] text-[var(--danger)]">Remove custom key</span>
+          </GroupRow>
         ) : (
           <div className="space-y-2 px-4 py-3">
             <TextInput
@@ -50,7 +58,7 @@ export function ScanSettings({ onNotify }: { onNotify?: (message: string) => voi
               onClick={() => persist(draft)}
               className="pressable min-h-[44px] w-full rounded-full bg-[var(--accent)] text-[15px] font-semibold text-white disabled:opacity-40"
             >
-              Save key
+              {builtInVisionKey() ? 'Use my own key' : 'Connect Gemini'}
             </button>
           </div>
         )}
@@ -65,7 +73,7 @@ export function ScanSettings({ onNotify }: { onNotify?: (message: string) => voi
         >
           Google AI Studio
         </a>
-        . Free tier is enough for occasional scans.
+        . Restrict it to this site if you share the app. Free tier is enough for occasional scans.
       </p>
     </>
   )

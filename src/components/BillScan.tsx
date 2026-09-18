@@ -1,7 +1,7 @@
 import { Camera, ImageIcon, LoaderCircle, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { formatMoney } from '../lib/money'
-import { loadVisionKey, ScanError, scanReceiptPhoto, type ReceiptScan } from '../lib/receipt'
+import { resolveVisionKey, ScanError, scanReceiptPhoto, type ReceiptScan } from '../lib/receipt'
 import type { Trip } from '../types'
 import { Group, GroupRow } from './ui'
 
@@ -32,9 +32,9 @@ export function BillScanPanel({
     setPreview(localUrl)
     setError('')
     setMessage('')
-    const key = loadVisionKey()
+    const key = resolveVisionKey()
     if (!key) {
-      setError('Add a free Gemini API key in Trip → Scan bills to autofill. You can still type the amount.')
+      setError('Connect Gemini in Scan bills (Home or Trip settings), then try the photo again.')
       return
     }
     setScanning(true)
@@ -72,7 +72,7 @@ export function BillScanPanel({
           <div className="min-w-0 flex-1">
             <p className="text-[17px] font-medium">Scan bill</p>
             <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-              Photo or your camera roll. Check every field before saving.
+              Gemini reads the photo. Check every field before saving.
             </p>
           </div>
         </GroupRow>
@@ -82,7 +82,7 @@ export function BillScanPanel({
             Take Photo
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,image/heic,image/heif,.heic,.heif"
               capture="environment"
               disabled={disabled || scanning}
               className="sr-only"
@@ -98,7 +98,7 @@ export function BillScanPanel({
             Library
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,image/heic,image/heif,.heic,.heif"
               disabled={disabled || scanning}
               className="sr-only"
               onChange={(e) => {
@@ -125,9 +125,9 @@ export function BillScanPanel({
             </span>
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[15px] font-medium">{scanning ? 'Scanning bill…' : 'Bill photo'}</p>
+            <p className="text-[15px] font-medium">{scanning ? 'Gemini is reading the bill…' : 'Bill photo'}</p>
             <p className="text-[13px] text-[var(--muted)]">
-              {scanning ? 'Reading amount, currency, and shop name.' : 'Attached to this draft only.'}
+              {scanning ? 'Amount, currency, shop, and line items.' : 'Attached to this draft only.'}
             </p>
           </div>
           {!scanning && (

@@ -5,7 +5,7 @@ import { DEFAULT_BASE_CURRENCY } from '../lib/currencies'
 import { DESTINATIONS, resolveDestination } from '../lib/destinations'
 import { formatMoney, tripTotalBase } from '../lib/money'
 import { downloadJson } from '../lib/share'
-import { allTripsWorkbookXml, downloadExcel } from '../lib/excel'
+import { downloadAllTripsExcel } from '../lib/excel'
 import { cn, todayISO } from '../lib/utils'
 import { useStore } from '../state'
 import { ScanSettings } from './ScanSettings'
@@ -130,8 +130,15 @@ export function HomePage() {
             <GroupRow
               inset
               onClick={() => {
-                downloadExcel('triptab.xls', allTripsWorkbookXml(data.trips))
-                notify('Excel file downloaded')
+                void downloadAllTripsExcel(data.trips)
+                  .then((how) => {
+                    notify(
+                      how === 'share'
+                        ? 'Spreadsheet ready — open in Excel or Numbers'
+                        : 'Excel file downloaded',
+                    )
+                  })
+                  .catch(() => notify('Could not export Excel'))
               }}
             >
               <Glyph className="bg-[#30D158]/15 text-[#30D158]">
