@@ -313,9 +313,17 @@ function expenseSheet(trip: Trip): Cell[][] {
 
 function balanceSheet(trip: Trip): Cell[][] {
   const names = peopleNames(trip)
-  const rows: Cell[][] = [['Person', `Paid (${trip.baseCurrency})`, `Share (${trip.baseCurrency})`, `Net (${trip.baseCurrency})`]]
+  const rows: Cell[][] = [
+    [
+      'Person',
+      `Paid (${trip.baseCurrency})`,
+      `Share / to pay (${trip.baseCurrency})`,
+      `Have paid (${trip.baseCurrency})`,
+      `Net (${trip.baseCurrency})`,
+    ],
+  ]
   for (const row of computeBalances(trip)) {
-    rows.push([names.get(row.personId) ?? 'Friend', row.paid, row.share, row.net])
+    rows.push([names.get(row.personId) ?? 'Friend', row.paid, row.share, row.funded, row.net])
   }
   return rows
 }
