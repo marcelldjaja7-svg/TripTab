@@ -1,10 +1,10 @@
 import { ArrowUpRight, Check, Copy, Crown } from 'lucide-react'
 import { formatMoney } from '../lib/money'
 import { describeTransfer } from '../lib/share'
-import { computeBalances, personSpendPaid, settlementExpense, suggestedTransfers } from '../lib/settle'
+import { computeBalances, describeBalance, personSpendPaid, settlementExpense, suggestedTransfers } from '../lib/settle'
 import { cn } from '../lib/utils'
 import type { Person, Trip } from '../types'
-import { Avatar, Button } from './ui'
+import { Avatar, Button, Group, GroupRow, SectionLabel } from './ui'
 
 const ROLLER_TITLES = [
   'THE HIGH ROLLER',
@@ -90,6 +90,39 @@ export function BalancesView({
           </>
         )}
       </article>
+
+      <SectionLabel>Each person's totals</SectionLabel>
+      <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
+        Paid is what they covered. Share is their split of each bill (equal, custom amounts, or percent). Settle-up
+        payments change the net, not trip spend.
+      </p>
+      <Group>
+        {computeBalances(trip).map((row) => {
+          const person = trip.people.find((p) => p.id === row.personId)
+          if (!person) return null
+          return (
+            <GroupRow key={row.personId} className="items-start py-3">
+              <Avatar person={person} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[17px] font-medium">{person.name}</p>
+                <p className="mt-0.5 text-[13px] text-[var(--muted)]">
+                  Paid {formatMoney(row.paid, trip.baseCurrency)}
+                  <span className="mx-1.5">·</span>
+                  Share {formatMoney(row.share, trip.baseCurrency)}
+                </p>
+              </div>
+              <p
+                className={cn(
+                  'text-right text-[15px] font-semibold tabular-nums',
+                  Math.abs(row.net) < 0.005 ? 'text-[var(--muted)]' : row.net > 0 ? 'text-[var(--accent)]' : '',
+                )}
+              >
+                {describeBalance(row, trip.baseCurrency)}
+              </p>
+            </GroupRow>
+          )
+        })}
+      </Group>
 
       <p className="px-1 pb-1.5 pt-6 text-[13px] font-normal uppercase tracking-[0.04em] text-[var(--muted)]">
         Suggested payments

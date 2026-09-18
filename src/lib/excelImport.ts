@@ -98,6 +98,7 @@ type Cols = {
   participants?: number
   category?: number
   splitMode?: number
+  shares?: number
 }
 
 function mapHeaders(row: (string | number)[]): Cols | null {
@@ -117,8 +118,9 @@ function mapHeaders(row: (string | number)[]): Cols | null {
       key === 'for'
     ) {
       cols.participants = i
-    } else if (key === 'category' || key === 'cat') cols.category = i
+    }     else if (key === 'category' || key === 'cat') cols.category = i
     else if (key === 'split') cols.splitMode = i
+    else if (key === 'shares' || key === 'share' || key === 'amounts' || key === '%') cols.shares = i
   })
   if (cols.amount === undefined || (cols.paidBy === undefined && cols.note === undefined)) return null
   return cols
@@ -217,6 +219,23 @@ function splitModeOf(raw: string): SplitMode {
   return 'equal'
 }
 
+function parseShareList(raw: string, people: Person[], participantIds: string[]): Record<string, number> | undefined {
+  const text = raw.trim()
+  if (!text) return undefined
+  const byName = new Map(people.map((p) => [p.name.trim().toLowerCase(), p.id]))
+  const out: Record<string, number> = {}
+  const re = /([^,;|/]+?)[:\s]+([\d.]+)\s*%?/g
+  let match: RegExpExecArray | null
+  while ((match = re.exec(text))) {
+    const name = (match[1] ?? '').trim().toLowerCase()
+    const n = Number(match[2])
+    if (!name || !Number.isFinite(n)) continue
+    const id = byName.get(name)
+    if (id && participantIds.includes(id)) out[id] = n
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 export function importExpenseRows(trip: Trip, rows: (string | number)[][]): ExcelImportResult {
   const warnings: string[] = []
   if (rows.length === 0) {
@@ -269,13 +288,16 @@ export function importExpenseRows(trip: Trip, rows: (string | number)[][]): Exce
       trip.categories.find((c) => c.id === 'other')?.id ??
       trip.categories[0]?.id ??
       'other'
+    const splitMode = splitModeOf(cellText(row[cols.splitMode ?? -1]))
+    const shares = parseShareList(cellText(row[cols.shares ?? -1]), people, participantIds)
     const expense: Expense = {
       id: uid(),
       amount,
       currency: currencyHint,
       paidBy: payer.id,
       participantIds,
-      splitMode: splitModeOf(cellText(row[cols.splitMode ?? -1])),
+      splitMode,
+      shares,
       categoryId,
       note,
       date: cellDate(row[cols.date ?? -1]),
