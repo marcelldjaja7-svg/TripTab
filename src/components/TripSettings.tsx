@@ -395,13 +395,20 @@ export function TripSettings({
 
       <SectionLabel>Export</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Excel opens on any phone. JSON is a full backup if you need to import later.
+        Excel files open in Excel, Numbers, and Google Sheets — including iPhone. JSON is a full backup.
       </p>
       <Group>
         <GroupRow
           onClick={() => {
-            downloadTripExcel(trip)
-            onNotify('Excel file downloaded')
+            void downloadTripExcel(trip)
+              .then((how) => {
+                onNotify(
+                  how === 'share'
+                    ? 'Spreadsheet ready — open in Excel or Numbers'
+                    : 'Excel file downloaded',
+                )
+              })
+              .catch(() => onNotify('Could not export Excel'))
           }}
         >
           <FileSpreadsheet size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
