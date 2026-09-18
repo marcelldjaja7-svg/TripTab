@@ -113,11 +113,20 @@ function emitPing(shareId: string, raw: unknown): void {
 
 async function fetchWithTimeout(url: string, init: RequestInit, ms = 4000): Promise<Response> {
   const controller = new AbortController()
-  const timer = globalThis.setTimeout(() => controller.abort(), ms)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = globalThis.setTimeout(() => {
+      controller.abort()
+      reject(new DOMException('Timeout', 'AbortError'))
+    }, ms)
+  })
   try {
-    return await fetch(url, { ...init, signal: controller.signal, credentials: 'omit' })
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal, credentials: 'omit' }),
+      timeout,
+    ])
   } finally {
-    globalThis.clearTimeout(timer)
+    if (timer !== undefined) globalThis.clearTimeout(timer)
   }
 }
 
@@ -265,7 +274,10 @@ export async function publishLivePing(shareId: string, trip: Trip, bin?: string 
   const topic = liveTopic(shareId)
   // ntfy.sh often hangs or 429s from this IP — do not block other phones on it.
   void postLivePing(PRIMARY_RELAY, topic, body, 2000)
-  await Promise.allSettled(FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 1200)))
+  await Promise.race([
+    Promise.allSettled(FALLBACK_RELAYS.map((relay) => postLivePing(relay, topic, body, 1200))),
+    new Promise<void>((resolve) => globalThis.setTimeout(resolve, 1300)),
+  ])
 }
 
 export async function pollLivePings(

@@ -88,12 +88,19 @@ function roomPayload(json: RoomBody): { payload?: string; bin?: string; trip?: T
   }
 }
 
+export function mintLiveShareId(): string {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? `tt${crypto.randomUUID().replace(/-/g, '')}`
+    : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
+}
+
 export async function createLiveRoom(trip: Trip): Promise<string> {
-  const shareId =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? `tt${crypto.randomUUID().replace(/-/g, '')}`
-      : `tt${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`
-  await pushLiveTrip(shareId, { ...trip, shareId, isDemo: false })
+  const shareId = mintLiveShareId()
+  try {
+    await pushLiveTrip(shareId, { ...trip, shareId, isDemo: false })
+  } catch {
+    /* later saves retry; the room id is still valid */
+  }
   return shareId
 }
 

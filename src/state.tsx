@@ -13,7 +13,7 @@ import {
 import {
   adoptSharedTrip,
   clearLiveShareLocation,
-  ensureLiveRoom,
+  mintLiveShareId,
   mergeTrips,
   pullLiveTrip,
   pushLiveTrip,
@@ -337,35 +337,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       resetAll: () => setData(defaultAppData()),
       notify,
       shareWithFriends: async (trip) => {
-        let shareId = trip.shareId
+        const shareId = trip.shareId || mintLiveShareId()
+        const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
+        setData((d) => ({
+          ...d,
+          trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
+        }))
+        setLiveRoomId(shareId)
+        setLiveShareHash(shareId, next)
         let live = false
         try {
-          shareId = await ensureLiveRoom(trip)
+          await pushLiveTrip(shareId, next)
           live = true
-          const next = { ...trip, shareId, isDemo: false, updatedAt: Date.now() }
-          setData((d) => ({
-            ...d,
-            trips: d.trips.map((t) => (t.id === trip.id ? next : t)),
-          }))
-          setLiveRoomId(shareId)
-          setLiveShareHash(shareId, next)
         } catch {
-          /* snapshot in the link still opens the trip */
+          /* snapshot in the link still opens the trip; later saves retry */
         }
-        const url = shareLinkForTrip({ ...trip, shareId }, shareId)
+        const url = shareLinkForTrip(next, shareId)
         try {
-          await navigator.clipboard.writeText(url)
+          await Promise.race([
+            navigator.clipboard.writeText(url),
+            new Promise((_, reject) => window.setTimeout(() => reject(new Error('clipboard')), 400)),
+          ])
         } catch {
           /* share sheet below may still work */
         }
         const mobile = typeof navigator !== 'undefined' && /iPhone|iPad|Android/i.test(navigator.userAgent)
         try {
           if (mobile && navigator.share) {
-            await navigator.share({
-              title: trip.name,
-              text: 'Open this TripTab link to add expenses with the group.',
-              url,
-            })
+            await Promise.race([
+              navigator.share({
+                title: trip.name,
+                text: 'Open this TripTab link to add expenses with the group.',
+                url,
+              }),
+              new Promise((_, reject) => window.setTimeout(() => reject(new Error('share')), 1500)),
+            ])
           }
         } catch {
           try {
