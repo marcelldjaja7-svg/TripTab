@@ -1,5 +1,5 @@
 import type { Trip } from '../types'
-import { mergeTrips, liveContentKey } from './merge'
+import { mergeTrips, liveContentKey, latestLogAt } from './merge'
 import { compactTripHeader, decodeTripShare, encodeTripShare } from './share'
 import { normalizeTrip } from './storage'
 
@@ -50,6 +50,7 @@ const channels = new Map<string, BroadcastChannel>()
 const listeners = new Map<string, Set<(ping: LivePing) => void>>()
 const transports = new Map<string, () => void>()
 const lastFp = new Map<string, string>()
+const pullListeners = new Map<string, Set<(trip: Trip) => void>>()
 
 function channelFor(shareId: string): BroadcastChannel | null {
   try {
@@ -107,7 +108,8 @@ function pingApplyKey(ping: LivePing): string {
 
 function emitPing(shareId: string, raw: unknown): void {
   const ping = parseLivePing(raw) ?? ntfyMessage(raw)
-  if (!ping || ping.by === liveClientId()) return
+  if (!ping) return
+  if (ping.by === liveClientId()) return
   // A first oversized ping may have no payload yet. Do not remember its
   // fingerprint or the later bytebin ping with the uploaded bills is dropped.
   if (!ping.p && !ping.bin) return
@@ -184,12 +186,10 @@ function ensureTransport(shareId: string): void {
   }
 
   const poll = globalThis.setInterval(() => {
-    // Keep polling every relay even when EventSource reports "open". ntfy.sh can
-    // sit in a zombie open state and fallbacks still hold the uploaded bills.
-    void pollLivePings(shareId).then((pings) => {
-      for (const ping of pings) emitPing(shareId, ping)
+    void pullLatestLiveTrip(shareId).then((trip) => {
+      if (trip) pullListeners.get(shareId)?.forEach((fn) => fn(trip))
     })
-  }, 1500)
+  }, 2000)
 
   transports.set(shareId, () => {
     stopped = true
@@ -237,10 +237,12 @@ export async function readLiveSnapshot(bin: string): Promise<Trip | null> {
 }
 
 function withLiveMeta(trip: Trip, shareId: string, ping: LivePing): Trip {
+  const logAt = latestLogAt(trip)
   return {
     ...trip,
     shareId,
     isDemo: false,
+    updatedAt: logAt || trip.updatedAt,
     updatedByName: trip.updatedByName || ping.who,
   }
 }
@@ -248,11 +250,15 @@ function withLiveMeta(trip: Trip, shareId: string, ping: LivePing): Trip {
 export async function tripFromPing(ping: LivePing, shareId: string): Promise<Trip | null> {
   const fromPayload = ping.p ? decodeTripShare(ping.p) : null
   const fromBin = ping.bin ? await readLiveSnapshot(ping.bin) : null
+  // A header-only payload has no bills — never let its republish clock replace the snapshot.
   if (fromPayload && fromBin) {
-    return withLiveMeta(mergeTrips(fromPayload, fromBin), shareId, ping)
+    const trip =
+      fromPayload.expenses.length === 0 ? fromBin : mergeTrips(fromPayload, fromBin)
+    return withLiveMeta(trip, shareId, ping)
   }
   const trip = fromPayload ?? fromBin
   if (!trip) return null
+  if (trip.expenses.length === 0 && ping.bin && !fromBin) return null
   return withLiveMeta(trip, shareId, ping)
 }
 
@@ -359,13 +365,27 @@ export async function pullLatestLiveTrip(shareId: string): Promise<Trip | null> 
   return merged
 }
 
-export function subscribeLivePings(shareId: string, onPing: (ping: LivePing) => void): () => void {
+export function subscribeLivePings(
+  shareId: string,
+  onPing: (ping: LivePing) => void,
+  onTrip?: (trip: Trip) => void,
+): () => void {
   const set = listeners.get(shareId) ?? new Set<(ping: LivePing) => void>()
   set.add(onPing)
   listeners.set(shareId, set)
+  if (onTrip) {
+    const trips = pullListeners.get(shareId) ?? new Set<(trip: Trip) => void>()
+    trips.add(onTrip)
+    pullListeners.set(shareId, trips)
+  }
   ensureTransport(shareId)
   return () => {
     set.delete(onPing)
+    if (onTrip) {
+      const trips = pullListeners.get(shareId)
+      trips?.delete(onTrip)
+      if (trips && trips.size === 0) pullListeners.delete(shareId)
+    }
     if (set.size === 0) transports.get(shareId)?.()
   }
 }

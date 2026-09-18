@@ -126,6 +126,29 @@ describe('mergeTrips', () => {
     expect(ids).toEqual(['a', 'c'])
   })
 
+  it('follows the last logged bill, not a stale phone clock', () => {
+    const a = 'a'
+    const stale = trip({
+      updatedAt: 9_000,
+      updatedByName: 'Old phone',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a, createdAt: 10 })],
+    })
+    const live = trip({
+      updatedAt: 20,
+      updatedByName: 'engdjaja',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({ id: 'e1', paidBy: a, createdAt: 10 }),
+        expense({ id: 'e2', paidBy: a, createdAt: 80, note: 'Last log' }),
+      ],
+    })
+    const merged = mergeTrips(stale, live)
+    expect(merged.expenses.map((e) => e.id).sort()).toEqual(['e1', 'e2'])
+    expect(merged.updatedByName).toBe('engdjaja')
+    expect(merged.updatedAt).toBe(80)
+  })
+
   it('does not republish a poorer 12-bill copy over a 43-bill room', () => {
     const a = 'a'
     const bills = (n: number) =>
