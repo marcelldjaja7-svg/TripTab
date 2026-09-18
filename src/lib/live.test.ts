@@ -132,7 +132,38 @@ describe('live channel', () => {
     })
     const trip = await tripFromPing(ping!, 'tt-merge-p-bin')
     expect(trip?.expenses).toHaveLength(43)
-    expect(trip?.updatedAt).toBe(40)
+    expect(trip?.updatedAt).toBe(43)
+    expect(trip?.updatedByName).toBe('43 bills')
+  })
+
+  it('does not let an empty header payload replace the full snapshot', async () => {
+    const header = { ...sample, expenses: [], updatedAt: 99_000, updatedByName: 'Stale phone' }
+    const full = withBills(43, 10)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-header-43')) {
+          return new Response(JSON.stringify(full), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 80_000,
+      by: 'friend',
+      who: 'Stale phone',
+      p: encodeTripShare(header),
+      bin: 'bin-header-43',
+    })
+    const trip = await tripFromPing(ping!, 'tt-header-bin')
+    expect(trip?.expenses).toHaveLength(43)
+    expect(trip?.updatedByName).toBe('43 bills')
+    expect(trip?.updatedAt).toBe(43)
   })
 
   it('drops unused conversion rates so pings fit in the live channel', () => {

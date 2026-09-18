@@ -172,11 +172,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
             }))
           }
-          if (shouldPublishLive(latest, remote)) {
+          // Never publish a stale phone over the room if we have not pulled yet.
+          if (remote ? shouldPublishLive(latest, remote) : !firstForRoom && latest.expenses.length > 0) {
             await pushLiveTrip(shareId, merged)
           }
           setLiveShareHash(shareId)
-          liveReadyRef.current = shareId
+          if (remote || !firstForRoom) liveReadyRef.current = shareId
         } catch {
           /* stay local if the room is briefly unreachable */
         }
@@ -207,11 +208,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return next
       })
     }
-    const unsub = subscribeLivePings(shareId, (ping) => {
-      void tripFromPing(ping, shareId).then((remote) => {
-        if (remote) applyRemote(remote)
-      })
-    })
+    const unsub = subscribeLivePings(
+      shareId,
+      (ping) => {
+        void tripFromPing(ping, shareId).then((remote) => {
+          if (remote && remote.expenses.length > 0) applyRemote(remote)
+        })
+      },
+      applyRemote,
+    )
     const onVis = () => {
       if (document.visibilityState !== 'visible') return
       void pullLatestLiveTrip(shareId).then((remote) => {

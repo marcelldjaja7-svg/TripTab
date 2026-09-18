@@ -4,9 +4,26 @@ function byId<T extends { id: string }>(items: T[]): Map<string, T> {
   return new Map(items.map((item) => [item.id, item]))
 }
 
+/** Timestamp of the most recently logged or edited bill. */
+export function latestLogAt(trip: Trip): number {
+  let max = 0
+  for (const expense of trip.expenses) {
+    const at = expense.updatedAt ?? expense.createdAt
+    if (at > max) max = at
+  }
+  return max
+}
+
+function versionSource(local: Trip, remote: Trip): Trip {
+  const localLog = latestLogAt(local)
+  const remoteLog = latestLogAt(remote)
+  if (localLog !== remoteLog) return localLog > remoteLog ? local : remote
+  return local.updatedAt >= remote.updatedAt ? local : remote
+}
+
 /** Union two copies of a live trip so 12-bill and 43-bill phones converge. */
 export function mergeTrips(local: Trip, remote: Trip): Trip {
-  const newer = local.updatedAt >= remote.updatedAt ? local : remote
+  const newer = versionSource(local, remote)
   const older = newer === local ? remote : local
   const deleted = new Set([...(local.deletedExpenseIds ?? []), ...(remote.deletedExpenseIds ?? [])])
 
@@ -29,6 +46,8 @@ export function mergeTrips(local: Trip, remote: Trip): Trip {
   const categories = byId(older.categories)
   for (const category of newer.categories) categories.set(category.id, category)
 
+  const logAt = Math.max(latestLogAt(local), latestLogAt(remote))
+
   return {
     ...newer,
     shareId: local.shareId || remote.shareId,
@@ -38,9 +57,9 @@ export function mergeTrips(local: Trip, remote: Trip): Trip {
     rates: { ...older.rates, ...newer.rates, [newer.baseCurrency]: 1 },
     deletedExpenseIds: [...deleted],
     isDemo: false,
-    updatedAt: Math.max(local.updatedAt, remote.updatedAt),
-    updatedBy: newer.updatedAt >= older.updatedAt ? newer.updatedBy : older.updatedBy,
-    updatedByName: newer.updatedAt >= older.updatedAt ? newer.updatedByName : older.updatedByName,
+    updatedAt: logAt || Math.max(local.updatedAt, remote.updatedAt),
+    updatedBy: newer.updatedBy,
+    updatedByName: newer.updatedByName,
   }
 }
 
