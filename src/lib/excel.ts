@@ -1,6 +1,7 @@
 import type { Trip } from '../types'
-import { expenseShares, toBase } from './money'
-import { computeBalances, suggestedTransfers } from './settle'
+import { currencyDecimals } from './currencies'
+import { expenseShares, fromMinor, isSettlement, toBase, tripTotalBase } from './money'
+import { computeBalances, expenseShareMinor, suggestedTransfers } from './settle'
 import { slugify } from './share'
 
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -290,11 +291,25 @@ function expenseSheet(trip: Trip): Cell[][] {
   const sorted = [...trip.expenses].sort(
     (a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt,
   )
+  const decimals = currencyDecimals(trip.baseCurrency)
   const rows: Cell[][] = [
-    ['Date', 'Note', 'Category', 'Paid by', 'Amount', 'Currency', `Amount (${trip.baseCurrency})`, 'Split', 'Participants', 'Shares'],
+    [
+      'Date',
+      'Note',
+      'Category',
+      'Paid by',
+      'Amount',
+      'Currency',
+      `Amount (${trip.baseCurrency})`,
+      'Split',
+      'Participants',
+      'Shares',
+      ...trip.people.map((person) => `Share (${person.name})`),
+    ],
   ]
   for (const expense of sorted) {
     const cat = cats.get(expense.categoryId)
+    const portions = isSettlement(trip, expense) ? new Map<string, number>() : expenseShareMinor(trip, expense)
     rows.push([
       expense.date || '',
       expense.note.trim() || cat?.name || 'Expense',
@@ -306,6 +321,9 @@ function expenseSheet(trip: Trip): Cell[][] {
       expense.splitMode,
       expense.participantIds.map((id) => names.get(id) ?? 'Friend').join(', '),
       shareExport(expense, names),
+      ...trip.people.map((person) =>
+        isSettlement(trip, expense) ? '' : fromMinor(portions.get(person.id) ?? 0, decimals),
+      ),
     ])
   }
   return rows
@@ -313,9 +331,30 @@ function expenseSheet(trip: Trip): Cell[][] {
 
 function balanceSheet(trip: Trip): Cell[][] {
   const names = peopleNames(trip)
-  const rows: Cell[][] = [['Person', `Paid (${trip.baseCurrency})`, `Share (${trip.baseCurrency})`, `Net (${trip.baseCurrency})`]]
+  const spent = tripTotalBase(trip)
+  const rows: Cell[][] = [
+    [
+      'Person',
+      `Paid (${trip.baseCurrency})`,
+      `Share / to pay (${trip.baseCurrency})`,
+      'To pay %',
+      `Have paid (${trip.baseCurrency})`,
+      'Have paid %',
+      `Net (${trip.baseCurrency})`,
+    ],
+  ]
   for (const row of computeBalances(trip)) {
-    rows.push([names.get(row.personId) ?? 'Friend', row.paid, row.share, row.net])
+    const toPayPct = spent > 0 ? (row.share / spent) * 100 : 0
+    const havePaidPct = spent > 0 ? (row.funded / spent) * 100 : 0
+    rows.push([
+      names.get(row.personId) ?? 'Friend',
+      row.paid,
+      row.share,
+      Math.round(toPayPct * 10) / 10,
+      row.funded,
+      Math.round(havePaidPct * 10) / 10,
+      row.net,
+    ])
   }
   return rows
 }

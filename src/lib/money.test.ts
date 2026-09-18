@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { equalPercents, equalShares, percentToAmounts, percentsMatch100, sharesMatchTotal, tripBillCount, tripTotalBase } from './money'
+import { equalPercents, equalShares, expenseShares, percentToAmounts, percentsMatch100, sharesMatchTotal, tripBillCount, tripTotalBase } from './money'
 import { ratesForBase } from './currencies'
 import { defaultCategories } from './demo'
 import type { Expense, Trip } from '../types'
@@ -30,6 +30,44 @@ describe('percent split', () => {
   it('equal percents sum to 100', () => {
     const pct = equalPercents(['a', 'b', 'c'])
     expect(percentsMatch100(pct, ['a', 'b', 'c'])).toBe(true)
+  })
+})
+
+describe('proportional expenseShares', () => {
+  it('keeps custom amounts that already add up to the bill', () => {
+    const shares = expenseShares({
+      id: 'e',
+      amount: 376,
+      currency: 'USD',
+      paidBy: 'a',
+      participantIds: ['a', 'b'],
+      splitMode: 'custom',
+      shares: { a: 183, b: 193 },
+      categoryId: 'food',
+      note: '',
+      date: '2026-09-17',
+      createdAt: 1,
+    })
+    expect(shares.a).toBeCloseTo(183)
+    expect(shares.b).toBeCloseTo(193)
+  })
+
+  it('scales custom amounts in proportion when they do not add up', () => {
+    const shares = expenseShares({
+      id: 'e',
+      amount: 30,
+      currency: 'USD',
+      paidBy: 'a',
+      participantIds: ['a', 'b'],
+      splitMode: 'custom',
+      shares: { a: 10, b: 10 },
+      categoryId: 'food',
+      note: '',
+      date: '2026-09-01',
+      createdAt: 1,
+    })
+    expect(shares.a).toBeCloseTo(15)
+    expect(shares.b).toBeCloseTo(15)
   })
 })
 

@@ -68,6 +68,73 @@ export function inverseRate(rate: number): number {
   return 1 / rate
 }
 
+export function participantIdsOf(expense: Expense): string[] {
+  const ids = expense.participantIds.filter(Boolean)
+  if (ids.length > 0) return [...new Set(ids)]
+  return expense.paidBy ? [expense.paidBy] : []
+}
+
+/**
+ * Split `totalMinor` in proportion to `weights` (Hamilton / largest remainder).
+ * Zero-weight people stay at 0. Leftover cents go to the largest fractional parts.
+ */
+export function allocateProportional(
+  ids: string[],
+  weights: Record<string, number>,
+  totalMinor: number,
+): Map<string, number> {
+  const out = new Map<string, number>()
+  if (ids.length === 0) return out
+  if (totalMinor === 0) {
+    for (const id of ids) out.set(id, 0)
+    return out
+  }
+  const rows = ids.map((id, index) => ({
+    id,
+    index,
+    w: Math.max(0, weights[id] ?? 0),
+  }))
+  const weightSum = rows.reduce((sum, row) => sum + row.w, 0)
+  if (weightSum <= 0) {
+    const n = ids.length
+    const base = Math.floor(totalMinor / n)
+    let rem = totalMinor - base * n
+    ids.forEach((id, i) => out.set(id, base + (i < rem ? 1 : 0)))
+    return out
+  }
+  const parts = rows.map((row) => {
+    const raw = (row.w * totalMinor) / weightSum
+    const floor = Math.floor(raw)
+    return { ...row, floor, frac: raw - floor }
+  })
+  let leftover = totalMinor - parts.reduce((sum, row) => sum + row.floor, 0)
+  const order = [...parts]
+    .filter((row) => row.w > 0)
+    .sort((a, b) => b.frac - a.frac || a.index - b.index)
+  const extra = new Map<string, number>()
+  let i = 0
+  while (leftover > 0 && order.length > 0) {
+    const row = order[i % order.length]!
+    extra.set(row.id, (extra.get(row.id) ?? 0) + 1)
+    leftover -= 1
+    i += 1
+  }
+  for (const row of parts) out.set(row.id, row.floor + (extra.get(row.id) ?? 0))
+  return out
+}
+
+/** Custom amounts and percents are weights. Equal splits use even weights. */
+export function splitWeights(expense: Expense, ids: string[]): Record<string, number> {
+  if ((expense.splitMode === 'percent' || expense.splitMode === 'custom') && expense.shares) {
+    const out: Record<string, number> = {}
+    for (const id of ids) out[id] = Math.max(0, expense.shares[id] ?? 0)
+    if (ids.some((id) => out[id]! > 0)) return out
+  }
+  const out: Record<string, number> = {}
+  for (const id of ids) out[id] = 1
+  return out
+}
+
 export function equalShares(
   amount: number,
   participantIds: string[],
@@ -77,13 +144,13 @@ export function equalShares(
   if (n === 0) return {}
   const decimals = currencyDecimals(currency)
   const totalMinor = toMinor(amount, decimals)
-  const base = Math.floor(totalMinor / n)
-  let rem = totalMinor - base * n
+  const parts = allocateProportional(
+    participantIds,
+    Object.fromEntries(participantIds.map((id) => [id, 1])),
+    totalMinor,
+  )
   const out: Record<string, number> = {}
-  participantIds.forEach((id, i) => {
-    const minor = base + (i < rem ? 1 : 0)
-    out[id] = fromMinor(minor, decimals)
-  })
+  for (const id of participantIds) out[id] = fromMinor(parts.get(id) ?? 0, decimals)
   return out
 }
 
@@ -114,38 +181,19 @@ export function percentToAmounts(
 ): Record<string, number> {
   const decimals = currencyDecimals(currency)
   const totalMinor = toMinor(amount, decimals)
-  let allocated = 0
+  const parts = allocateProportional(participantIds, percents, totalMinor)
   const out: Record<string, number> = {}
-  participantIds.forEach((id, index) => {
-    const last = index === participantIds.length - 1
-    const pct = percents[id] ?? 0
-    let minor: number
-    if (last) {
-      minor = totalMinor - allocated
-    } else {
-      minor = Math.round((pct / 100) * totalMinor)
-      allocated += minor
-    }
-    out[id] = fromMinor(minor, decimals)
-  })
+  for (const id of participantIds) out[id] = fromMinor(parts.get(id) ?? 0, decimals)
   return out
 }
 
 export function expenseShares(expense: Expense): Record<string, number> {
-  if (expense.splitMode === 'custom' && expense.shares) {
-    const out: Record<string, number> = {}
-    let sum = 0
-    for (const id of expense.participantIds) {
-      const n = expense.shares[id] ?? 0
-      out[id] = n
-      sum += n
-    }
-    if (sum > 0) return out
-  }
-  if (expense.splitMode === 'percent' && expense.shares) {
-    return percentToAmounts(expense.amount, expense.shares, expense.participantIds, expense.currency)
-  }
-  return equalShares(expense.amount, expense.participantIds, expense.currency)
+  const ids = participantIdsOf(expense)
+  const decimals = currencyDecimals(expense.currency)
+  const parts = allocateProportional(ids, splitWeights(expense, ids), toMinor(expense.amount, decimals))
+  const out: Record<string, number> = {}
+  for (const id of ids) out[id] = fromMinor(parts.get(id) ?? 0, decimals)
+  return out
 }
 
 export function sharesSum(shares: Record<string, number>): number {

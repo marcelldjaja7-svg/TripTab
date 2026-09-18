@@ -1,7 +1,14 @@
 import { ArrowUpRight, Check, Copy, Crown } from 'lucide-react'
-import { formatMoney } from '../lib/money'
+import { formatMoney, tripTotalBase } from '../lib/money'
 import { describeTransfer } from '../lib/share'
-import { computeBalances, describeBalance, personTripShare, settlementExpense, suggestedTransfers } from '../lib/settle'
+import {
+  computeBalances,
+  describeBalance,
+  formatSharePercent,
+  personTripShare,
+  settlementExpense,
+  suggestedTransfers,
+} from '../lib/settle'
 import { cn } from '../lib/utils'
 import type { Person, Trip } from '../types'
 import { Avatar, Button, Group, GroupRow, SectionLabel } from './ui'
@@ -22,6 +29,7 @@ export function BalancesView({
   trip: Trip
   onLogSettlement: (next: Trip) => void
 }) {
+  const spent = tripTotalBase(trip)
   const balances = [...computeBalances(trip)].sort((a, b) => {
     const shareA = personTripShare(trip, a.personId)
     const shareB = personTripShare(trip, b.personId)
@@ -50,7 +58,9 @@ export function BalancesView({
         <h2 className="casino-serif mt-2 text-center text-[34px] leading-none tracking-tight text-[#f6e7b2] sm:text-[40px]">
           High Rollers
         </h2>
-        <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">Each friend's share — paid and settled.</p>
+        <p className="mt-2 text-center text-[14px] text-[#d9c48a]/80">
+          Each friend's share of what they have to pay, in proportion to the split.
+        </p>
 
         {ranked.length === 0 ? (
           <p className="mt-8 pb-4 text-center text-[15px] text-[#d9c48a]/70">Add friends to open the table.</p>
@@ -78,9 +88,17 @@ export function BalancesView({
                       {titleForRank(index, row.amount)}
                     </p>
                   </div>
-                  <p className="text-right text-[15px] font-semibold tabular-nums text-[#f6e7b2]">
-                    {formatMoney(row.amount, trip.baseCurrency)}
-                  </p>
+                  <div className="text-right">
+                    <p className="text-[15px] font-semibold tabular-nums text-[#f6e7b2]">
+                      {formatMoney(row.amount, trip.baseCurrency)}
+                    </p>
+                    <p className="text-[11px] tabular-nums text-[#d4af37]/70">
+                      {formatSharePercent(row.amount, spent)} of spend to pay
+                    </p>
+                    <p className="text-[11px] tabular-nums text-[#d4af37]/55">
+                      {formatSharePercent(row.funded, spent)} have paid
+                    </p>
+                  </div>
                 </li>
               ))}
             </ol>
@@ -93,8 +111,9 @@ export function BalancesView({
 
       <SectionLabel>Each person's totals</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Paid is what they covered. Share is their split of each bill (equal, custom amounts, or percent). Settle-up
-        payments change the net, not trip spend.
+        To pay is this friend's proportion of each bill (equal, custom amounts, or percent). Have
+        paid is cards plus settle-up. After settle-up, the two amounts — and their % of spend —
+        match.
       </p>
       <Group>
         {computeBalances(trip).map((row) => {
@@ -106,9 +125,11 @@ export function BalancesView({
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[17px] font-medium">{person.name}</p>
                 <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-                  Paid {formatMoney(row.paid, trip.baseCurrency)}
+                  To pay {formatMoney(row.share, trip.baseCurrency)}{' '}
+                  ({formatSharePercent(row.share, spent)})
                   <span className="mx-1.5">·</span>
-                  Share {formatMoney(row.share, trip.baseCurrency)}
+                  Have paid {formatMoney(row.funded, trip.baseCurrency)}{' '}
+                  ({formatSharePercent(row.funded, spent)})
                 </p>
               </div>
               <p
