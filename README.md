@@ -39,7 +39,7 @@ npm test
 
 No API keys are required to use TripTab. Optional extras:
 
-- **Fetch live rates** uses the public [Frankfurter](https://www.frankfurter.app/) API.
+- **Fetch live rates** uses the public [Frankfurter](https://frankfurter.dev/) API (`from` each used currency `to` the trip base, e.g. JPY→IDR).
 - **Scan bill** uses [Google Gemini](https://aistudio.google.com/apikey) vision. Paste a free API key once under **Scan bills** (home or trip settings). It stays in this browser’s `localStorage` and is never written into trip backups or live invite links. Without a key, take/upload still works as a preview, and you enter the expense yourself.
 
 ## Scan a receipt on your phone

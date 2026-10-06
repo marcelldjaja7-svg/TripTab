@@ -55,7 +55,7 @@ export function TripSettings({
 
   const pullRates = async () => {
     setFetching(true)
-    const live = await fetchLiveRates(trip.baseCurrency)
+    const live = await fetchLiveRates(trip.baseCurrency, usedCurrencies)
     setFetching(false)
     if (!live) {
       onNotify('Live rates unavailable — edit manually')
@@ -346,7 +346,7 @@ export function TripSettings({
 
       <SectionLabel>Conversion rates</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        1 unit of each currency in {trip.baseCurrency}. Manual is enough; live fetch is optional.
+        1 unit of each currency in {trip.baseCurrency}. Set JPY by hand, or fetch (JPY→{trip.baseCurrency} from Frankfurter).
         {trip.ratesUpdatedAt ? ` Last fetch ${new Date(trip.ratesUpdatedAt).toLocaleString()}.` : ''}
       </p>
       <Group>

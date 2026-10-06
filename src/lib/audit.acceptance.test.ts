@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Expense, Trip } from '../types'
 import { convertRatesToNewBase } from './currencies'
 import { defaultCategories } from './demo'
+import { applyExpenseSave } from './expenseSave'
 import { applyTripSave, liveContentKey, mergeTrips } from './merge'
 import {
   equalShares,
@@ -619,6 +620,41 @@ describe('already-fixed splits on this branch', () => {
     expect(amounts.a + amounts.b + amounts.c).toBe(1)
     expect(amounts.c).toBe(0)
     expect(percentsMatch100({ a: 50, b: 50, c: 0 }, ['a', 'b', 'c'])).toBe(true)
+  })
+})
+
+describe('re-saving a locked bill does not snap the trip rate', () => {
+  it('keeps trip JPY at 110 and the dinner lock at 105 when only the amount changes', () => {
+    const dinner = bill({
+      id: 'dinner',
+      paidBy: 'a',
+      amount: 3_000,
+      currency: 'JPY',
+      fxRate: 105,
+      participantIds: ['a', 'b'],
+    })
+    const t = trip({
+      people: abc.slice(0, 2),
+      rates: { IDR: 1, JPY: 110 },
+      rateTouchedAt: { JPY: 500 },
+      expenses: [dinner],
+    })
+    const saved = applyExpenseSave(t, { ...dinner, amount: 3_300, fxRate: 105 }, { currency: 'JPY', rate: 105 })
+    expect(saved.rates.JPY).toBe(110)
+    expect(saved.rateTouchedAt?.JPY).toBe(500)
+    expect(saved.expenses[0]?.fxRate).toBe(105)
+    expect(saved.expenses[0]?.amount).toBe(3_300)
+    expect(toBaseMinor(3_300, 'JPY', saved, saved.expenses[0])).toBe(346_500)
+    const taxi = bill({
+      id: 'taxi',
+      paidBy: 'b',
+      amount: 2_000,
+      currency: 'JPY',
+      participantIds: ['a', 'b'],
+    })
+    const withTaxi = applyExpenseSave(saved, taxi, { currency: 'JPY', rate: 110 })
+    expect(withTaxi.rates.JPY).toBe(110)
+    expect(toBaseMinor(2_000, 'JPY', withTaxi, withTaxi.expenses.find((e) => e.id === 'taxi'))).toBe(220_000)
   })
 })
 

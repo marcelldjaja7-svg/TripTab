@@ -206,10 +206,15 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
       note: noteFromScan(note.trim(), scanLines),
       date: parseExpenseDate(date) || date,
       createdAt: expense?.createdAt ?? Date.now(),
-      fxRate: currency === trip.baseCurrency ? 1 : rate,
+      fxRate:
+        editing && expense && expense.currency === currency && typeof expense.fxRate === 'number' && expense.fxRate > 0
+          ? expense.fxRate
+          : currency === trip.baseCurrency
+            ? 1
+            : rate,
       lineItems: scanLines.length ? scanLines : undefined,
     }
-    onSave(next, currency === trip.baseCurrency ? undefined : { currency, rate })
+    onSave(next, editing || currency === trip.baseCurrency ? undefined : { currency, rate })
   }
 
   return (
