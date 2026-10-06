@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Expense, Trip } from '../types'
 import { defaultCategories } from './demo'
-import { mergeTrips } from './sync'
+import { encodeTripShare } from './share'
+import { liveContentKey } from './merge'
+import { adoptSharedTrip, mergeTrips, pullLiveTrip, shouldPublishLive } from './sync'
 
 function trip(over: Partial<Trip> & Pick<Trip, 'people' | 'expenses'>): Trip {
   return {
@@ -58,6 +60,23 @@ describe('mergeTrips', () => {
     expect(ids).toEqual(['e1', 'e2'])
   })
 
+  it('keeps who last updated from the newer trip', () => {
+    const a = 'a'
+    const older = trip({
+      updatedAt: 10,
+      updatedByName: 'Sam',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [],
+    })
+    const newer = trip({
+      updatedAt: 40,
+      updatedByName: 'Alex',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a })],
+    })
+    expect(mergeTrips(older, newer).updatedByName).toBe('Alex')
+  })
+
   it('does not resurrect a deleted expense', () => {
     const a = 'a'
     const local = trip({
@@ -72,6 +91,22 @@ describe('mergeTrips', () => {
       expenses: [expense({ id: 'e1', paidBy: a })],
     })
     expect(mergeTrips(local, remote).expenses).toHaveLength(0)
+  })
+
+  it('keeps an uploaded bill on the older trip when the other phone is newer', () => {
+    const a = 'a'
+    const local = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'scan-17', paidBy: a, amount: 88, date: '2026-09-17', updatedAt: 10 })],
+    })
+    const remote = trip({
+      updatedAt: 50,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'coffee', paidBy: a, amount: 4, updatedAt: 50 })],
+    })
+    const ids = mergeTrips(local, remote).expenses.map((e) => e.id).sort()
+    expect(ids).toEqual(['coffee', 'scan-17'])
   })
 
   it('keeps people added on two devices', () => {
@@ -91,30 +126,311 @@ describe('mergeTrips', () => {
     const ids = mergeTrips(left, right).people.map((p) => p.id).sort()
     expect(ids).toEqual(['a', 'c'])
   })
+
+  it('follows the last logged bill, not a stale phone clock', () => {
+    const a = 'a'
+    const stale = trip({
+      updatedAt: 9_000,
+      updatedByName: 'Old phone',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a, createdAt: 10 })],
+    })
+    const live = trip({
+      updatedAt: 20,
+      updatedByName: 'engdjaja',
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({ id: 'e1', paidBy: a, createdAt: 10 }),
+        expense({ id: 'e2', paidBy: a, createdAt: 80, note: 'Last log' }),
+      ],
+    })
+    const merged = mergeTrips(stale, live)
+    expect(merged.expenses.map((e) => e.id).sort()).toEqual(['e1', 'e2'])
+    expect(merged.updatedByName).toBe('engdjaja')
+    expect(merged.updatedAt).toBe(80)
+  })
+
+  it('does not republish a poorer 12-bill copy over a 43-bill room', () => {
+    const a = 'a'
+    const bills = (n: number) =>
+      Array.from({ length: n }, (_, i) => expense({ id: `e${i}`, paidBy: a, amount: i + 1 }))
+    const stale = trip({
+      updatedAt: 90,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: bills(12),
+    })
+    const live = trip({
+      updatedAt: 40,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: bills(43),
+    })
+    expect(shouldPublishLive(stale, live)).toBe(false)
+    expect(shouldPublishLive({ ...stale, expenses: [...stale.expenses, expense({ id: 'new', paidBy: a })] }, live)).toBe(
+      true,
+    )
+    expect(shouldPublishLive(trip({ people: [{ id: a, name: 'A', color: '#000' }], expenses: [] }), null)).toBe(false)
+  })
+
+  it('keeps a rename when the other phone only logged a newer bill', () => {
+    const a = 'a'
+    const local = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'Alex', color: '#000', updatedAt: 30 }],
+      expenses: [expense({ id: 'e1', paidBy: a, createdAt: 10 })],
+    })
+    const remote = trip({
+      updatedAt: 80,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({ id: 'e1', paidBy: a, createdAt: 10 }),
+        expense({ id: 'e2', paidBy: a, createdAt: 80, note: 'Newer bill' }),
+      ],
+    })
+    const merged = mergeTrips(local, remote)
+    expect(merged.people.find((p) => p.id === a)?.name).toBe('Alex')
+    expect(merged.expenses.map((e) => e.id).sort()).toEqual(['e1', 'e2'])
+  })
+
+  it('does not resurrect a deleted friend', () => {
+    const local = trip({
+      updatedAt: 20,
+      deletedPersonIds: ['c'],
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [],
+    })
+    const remote = trip({
+      updatedAt: 10,
+      people: [
+        { id: 'a', name: 'A', color: '#000' },
+        { id: 'c', name: 'C', color: '#222' },
+      ],
+      expenses: [],
+    })
+    expect(mergeTrips(local, remote).people.map((p) => p.id)).toEqual(['a'])
+    expect(mergeTrips(local, remote).deletedPersonIds).toContain('c')
+  })
+
+  it('keeps scanned line items when the other phone has a newer unrelated bill', () => {
+    const a = 'a'
+    const local = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({
+          id: 'scan-1',
+          paidBy: a,
+          amount: 88,
+          updatedAt: 10,
+          lineItems: [
+            { name: 'Nasi', amount: 50 },
+            { name: 'Es teh', amount: 38 },
+          ],
+        }),
+      ],
+    })
+    const remote = trip({
+      updatedAt: 50,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'coffee', paidBy: a, amount: 4, updatedAt: 50 })],
+    })
+    const merged = mergeTrips(local, remote)
+    const scan = merged.expenses.find((e) => e.id === 'scan-1')
+    expect(scan?.lineItems).toEqual([
+      { name: 'Nasi', amount: 50 },
+      { name: 'Es teh', amount: 38 },
+    ])
+    expect(merged.expenses.map((e) => e.id).sort()).toEqual(['coffee', 'scan-1'])
+  })
+
+  it('republishes when only line items or a friend change', () => {
+    const a = 'a'
+    const base = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a, amount: 20, updatedAt: 10 })],
+    })
+    const items = {
+      ...base,
+      expenses: [
+        {
+          ...base.expenses[0],
+          updatedAt: 20,
+          lineItems: [{ name: 'Nasi', amount: 20 }],
+        },
+      ],
+    }
+    const renamed = {
+      ...base,
+      people: [{ id: a, name: 'Alex', color: '#000', updatedAt: 40 }],
+    }
+    expect(liveContentKey(base)).not.toBe(liveContentKey(items))
+    expect(liveContentKey(base)).not.toBe(liveContentKey(renamed))
+    expect(shouldPublishLive(items, base)).toBe(true)
+    expect(shouldPublishLive(renamed, base)).toBe(true)
+  })
+
+  it('keeps scanned items when a later edit of the same bill omitted them', () => {
+    const a = 'a'
+    const scanned = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({
+          id: 'e1',
+          paidBy: a,
+          amount: 88,
+          updatedAt: 10,
+          lineItems: [
+            { name: 'Nasi', amount: 50 },
+            { name: 'Es teh', amount: 38 },
+          ],
+        }),
+      ],
+    })
+    const edited = trip({
+      updatedAt: 40,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a, amount: 90, note: 'Warung', updatedAt: 40 })],
+    })
+    const merged = mergeTrips(scanned, edited)
+    const bill = merged.expenses.find((e) => e.id === 'e1')
+    expect(bill?.amount).toBe(90)
+    expect(bill?.note).toBe('Warung')
+    expect(bill?.lineItems).toEqual([
+      { name: 'Nasi', amount: 50 },
+      { name: 'Es teh', amount: 38 },
+    ])
+  })
 })
 
-describe('live room API', () => {
-  it('creates and reads a trip room', async () => {
+describe('adoptSharedTrip', () => {
+  it('merges a snapshot into the existing trip instead of ignoring new bills', () => {
+    const local = trip({
+      id: 't',
+      shareId: 'room1',
+      updatedAt: 10,
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: 'a' })],
+    })
+    const incoming = trip({
+      id: 't',
+      shareId: 'room1',
+      updatedAt: 40,
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e2', paidBy: 'a', amount: 12 })],
+    })
+    const next = adoptSharedTrip([local], incoming, 'room1')
+    expect(next.currentTripId).toBe('t')
+    expect(next.trips[0].expenses.map((e) => e.id).sort()).toEqual(['e1', 'e2'])
+  })
+})
+
+describe('live room payload', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('reads a trip from the room payload without bytebin', async () => {
     const sample = trip({
       name: 'API check',
       people: [{ id: 'a', name: 'A', color: '#000' }],
       expenses: [],
     })
-    const { createLiveRoom, pullLiveTrip, pushLiveTrip } = await import('./sync')
-    const id = await createLiveRoom(sample)
-    expect(id.length).toBeGreaterThan(8)
-    const loaded = await pullLiveTrip(id)
+    const encoded = encodeTripShare(sample)
+    const shareId = 'ff808181abcd1234abcd5678'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.includes(shareId)) {
+          return new Response(JSON.stringify({ id: shareId, name: 'triptab', data: { payload: encoded } }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const loaded = await pullLiveTrip(shareId)
     expect(loaded?.name).toBe('API check')
-    expect(loaded?.shareId).toBe(id)
+    expect(loaded?.shareId).toBe(shareId)
+  })
 
-    const withBill = {
-      ...sample,
-      shareId: id,
-      updatedAt: Date.now(),
-      expenses: [expense({ id: 'e-live', paidBy: 'a', amount: 25, updatedAt: Date.now() })],
-    }
-    await pushLiveTrip(id, withBill)
-    const again = await pullLiveTrip(id)
-    expect(again?.expenses.map((e) => e.id)).toContain('e-live')
-  }, 25000)
+  it('writes a live ping when creating and updating a room', async () => {
+    const sample = trip({
+      name: 'API check',
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [],
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.includes('lucko.me/post') && method === 'POST') {
+        return new Response(JSON.stringify({ key: 'bin123456' }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.includes('ntfy')) {
+        return new Response('{}', { status: 200 })
+      }
+      if (url.includes('/objects') && method === 'PUT') {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { createLiveRoom, pushLiveTrip } = await import('./sync')
+    const id = await createLiveRoom(sample)
+    expect(id.startsWith('tt')).toBe(true)
+    expect(id.length).toBe(10)
+    await pushLiveTrip(id, { ...sample, shareId: id, expenses: [expense({ id: 'e-live', paidBy: 'a' })] })
+    const urls = fetchMock.mock.calls.map(([input]) => String(input))
+    expect(urls.some((url) => url.includes('ntfy'))).toBe(true)
+  })
+
+  it('stores a full snapshot before pinging so a trip can hold any number of bills', async () => {
+    const fat = trip({
+      name: 'Huge scan dump',
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: Array.from({ length: 40 }, (_, i) =>
+        expense({
+          id: `scan-${i}`,
+          paidBy: 'a',
+          amount: 10 + i,
+          note: `Uploaded receipt ${i} ${'x'.repeat(80)}`,
+        }),
+      ),
+    })
+    const order: string[] = []
+    const ntfyBodies: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url.includes('lucko.me/post') && method === 'POST') {
+        order.push('bytebin')
+        return new Response(JSON.stringify({ key: 'bin-huge' }), {
+          status: 201,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.includes('ntfy') && method === 'POST') {
+        order.push('ntfy')
+        ntfyBodies.push(String(init?.body ?? ''))
+        return new Response('{}', { status: 200 })
+      }
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { pushLiveTrip } = await import('./sync')
+    await pushLiveTrip('tthuge', fat)
+    expect(order[0]).toBe('bytebin')
+    expect(order).toContain('ntfy')
+    expect(ntfyBodies.some((body) => body.includes('bin-huge'))).toBe(true)
+    expect(ntfyBodies.every((body) => body.length <= 4000)).toBe(true)
+  })
 })

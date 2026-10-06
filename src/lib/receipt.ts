@@ -1,3 +1,4 @@
+import { parseExpenseDate } from './dates'
 import { CURRENCY_CODES, DEFAULT_BASE_CURRENCY, getCurrency } from './currencies'
 
 export const VISION_KEY_STORAGE = 'triptab.visionKey'
@@ -45,6 +46,21 @@ export function maskVisionKey(key: string): string {
   return `${k.slice(0, 4)}…${k.slice(-4)}`
 }
 
+export function builtInVisionKey(): string {
+  const key = import.meta.env.VITE_GEMINI_API_KEY
+  return typeof key === 'string' ? key.trim() : ''
+}
+
+export function resolveVisionKey(): string {
+  return loadVisionKey() || builtInVisionKey()
+}
+
+export function visionKeySource(): 'custom' | 'builtin' | 'none' {
+  if (loadVisionKey()) return 'custom'
+  if (builtInVisionKey()) return 'builtin'
+  return 'none'
+}
+
 const SYMBOL_TO_CODE: Record<string, string> = {
   RP: 'IDR',
   IDR: 'IDR',
@@ -76,6 +92,50 @@ const SYMBOL_TO_CODE: Record<string, string> = {
   PHP: 'PHP',
   VND: 'VND',
   DONG: 'VND',
+  BDT: 'BDT',
+  TAKA: 'BDT',
+  AED: 'AED',
+  SAR: 'SAR',
+  QAR: 'QAR',
+  KWD: 'KWD',
+  BHD: 'BHD',
+  OMR: 'OMR',
+  JOD: 'JOD',
+  ILS: 'ILS',
+  TRY: 'TRY',
+  TL: 'TRY',
+  EGP: 'EGP',
+  MAD: 'MAD',
+  KES: 'KES',
+  NGN: 'NGN',
+  ZAR: 'ZAR',
+  MXN: 'MXN',
+  BRL: 'BRL',
+  R$: 'BRL',
+  ARS: 'ARS',
+  CLP: 'CLP',
+  COP: 'COP',
+  PEN: 'PEN',
+  SEK: 'SEK',
+  NOK: 'NOK',
+  DKK: 'DKK',
+  ISK: 'ISK',
+  PLN: 'PLN',
+  CZK: 'CZK',
+  HUF: 'HUF',
+  RON: 'RON',
+  BGN: 'BGN',
+  FJD: 'FJD',
+  TWD: 'TWD',
+  NT$: 'TWD',
+  MOP: 'MOP',
+  KHR: 'KHR',
+  LAK: 'LAK',
+  MMK: 'MMK',
+  BND: 'BND',
+  LKR: 'LKR',
+  NPR: 'NPR',
+  PKR: 'PKR',
 }
 
 export function inferCurrency(raw: unknown, baseCurrency: string): string | undefined {
@@ -124,35 +184,7 @@ export function parseAmountValue(raw: unknown, currency?: string): number | unde
 }
 
 export function parseScanDate(raw: unknown): string | undefined {
-  if (typeof raw !== 'string') return undefined
-  const t = raw.trim()
-  const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (iso) return validIso(iso[1], iso[2], iso[3])
-  const dmy = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/)
-  if (dmy) return validIso(dmy[3], dmy[2], dmy[1]) ?? validIso(dmy[3], dmy[1], dmy[2])
-  const mdy = t.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2})$/)
-  if (mdy) {
-    const year = Number(mdy[3]) < 70 ? 2000 + Number(mdy[3]) : 1900 + Number(mdy[3])
-    return validIso(String(year), mdy[1], mdy[2]) ?? validIso(String(year), mdy[2], mdy[1])
-  }
-  return undefined
-}
-
-function validIso(y: string, m: string, d: string): string | undefined {
-  const year = Number(y)
-  const month = Number(m)
-  const day = Number(d)
-  if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31) return undefined
-  const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-  const dt = new Date(`${iso}T12:00:00`)
-  if (Number.isNaN(dt.getTime())) return undefined
-  const today = new Date()
-  const max = new Date(today)
-  max.setDate(max.getDate() + 1)
-  const min = new Date(today)
-  min.setFullYear(min.getFullYear() - 3)
-  if (dt > max || dt < min) return undefined
-  return iso
+  return parseExpenseDate(raw)
 }
 
 export function guessCategoryId(
@@ -195,7 +227,7 @@ export function normalizeReceiptScan(
   const amount = parseAmountValue(raw.amount ?? raw.total ?? raw.grandTotal, currency)
   const merchant = typeof raw.merchant === 'string' ? raw.merchant.trim() : typeof raw.vendor === 'string' ? raw.vendor.trim() : ''
   const noteRaw = typeof raw.note === 'string' ? raw.note.trim() : typeof raw.title === 'string' ? raw.title.trim() : ''
-  const note = (noteRaw || merchant).slice(0, 80)
+  const note = (noteRaw || merchant).slice(0, 240)
   const date = parseScanDate(raw.date ?? raw.issuedAt ?? raw.receiptDate)
   const categoryId = guessCategoryId(`${merchant} ${note} ${String(raw.category ?? '')}`, opts.categories, typeof raw.category === 'string' ? raw.category : typeof raw.categoryId === 'string' ? raw.categoryId : undefined)
   const lineItems = Array.isArray(raw.lineItems)
@@ -206,15 +238,15 @@ export function normalizeReceiptScan(
           const name = typeof row.name === 'string' ? row.name.trim() : typeof row.description === 'string' ? row.description.trim() : ''
           const lineAmount = parseAmountValue(row.amount ?? row.total, currency)
           if (!name || lineAmount === undefined) return null
-          return { name: name.slice(0, 60), amount: lineAmount }
+          return { name: name.slice(0, 120), amount: lineAmount }
         })
         .filter((x): x is ReceiptLine => Boolean(x))
-        .slice(0, 20)
+        .slice(0, 40)
     : undefined
   const scan: ReceiptScan = {}
   if (amount !== undefined) scan.amount = amount
   if (currency) scan.currency = currency
-  if (merchant) scan.merchant = merchant.slice(0, 60)
+  if (merchant) scan.merchant = merchant.slice(0, 120)
   if (note) scan.note = note
   if (date) scan.date = date
   if (categoryId) scan.categoryId = categoryId
@@ -244,7 +276,13 @@ export function extractJsonObject(text: string): unknown {
   }
 }
 
-const MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash']
+/** Current Gemini Flash models. 1.5 and 2.0 are shut down and 404. */
+export const SCAN_MODELS = [
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-2.5-flash',
+] as const
 
 function scanPrompt(baseCurrency: string, categories: { id: string; name: string }[]): string {
   const cats = categories
@@ -260,38 +298,62 @@ Rules:
 - Indonesian receipts often use "." as thousands (88.000 means 88000 IDR). Return the numeric amount, not a formatted string.
 - date is the receipt date if clearly visible, else null.
 - category must be one of: ${cats}
-- note should be a short human label (merchant name).
-- lineItems: list every distinct item/dish/product with its line price. Include up to 20. Skip tax/service/change/subtotal rows. If quantities exist, one row per product (name may include qty). Always fill lineItems when any items are readable.
+- note should be a short human label (merchant or what was bought).
+- lineItems: every distinct product/service line on the bill, in order. Include as many as are readable (up to 40). Skip only blank or unreadable rows. Tax/service/total rows can be omitted if a grand total is already in amount. Always fill lineItems when any items are readable.
 If this is not a receipt, still guess amount if any total is visible; otherwise nulls.`
+}
+
+async function drawToJpeg(
+  source: CanvasImageSource,
+  width: number,
+  height: number,
+): Promise<string> {
+  const max = 2400
+  const scale = Math.min(1, max / Math.max(width, height))
+  const w = Math.max(1, Math.round(width * scale))
+  const h = Math.max(1, Math.round(height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('canvas')
+  ctx.drawImage(source, 0, 0, w, h)
+  const blob: Blob = await new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('blob'))), 'image/jpeg', 0.82)
+  })
+  return blobToBase64(blob)
 }
 
 export async function fileToInlineImage(file: File): Promise<{ mime: string; data: string; previewUrl: string }> {
   const previewUrl = URL.createObjectURL(file)
   try {
-    const bitmap = await createImageBitmap(file)
-    const max = 1600
-    const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height))
-    const w = Math.max(1, Math.round(bitmap.width * scale))
-    const h = Math.max(1, Math.round(bitmap.height * scale))
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('canvas')
-    ctx.drawImage(bitmap, 0, 0, w, h)
-    bitmap.close()
-    const blob: Blob = await new Promise((resolve, reject) => {
-      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('blob'))), 'image/jpeg', 0.72)
+    if (typeof createImageBitmap === 'function') {
+      const bitmap = await createImageBitmap(file)
+      const data = await drawToJpeg(bitmap, bitmap.width, bitmap.height)
+      bitmap.close()
+      return { mime: 'image/jpeg', data, previewUrl }
+    }
+  } catch {
+    /* iPhone HEIC sometimes needs an <img> decode */
+  }
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image()
+      el.onload = () => resolve(el)
+      el.onerror = () => reject(new Error('img'))
+      el.src = previewUrl
     })
-    const data = await blobToBase64(blob)
+    const data = await drawToJpeg(img, img.naturalWidth || img.width, img.naturalHeight || img.height)
     return { mime: 'image/jpeg', data, previewUrl }
   } catch {
-    if (file.type && file.type.startsWith('image/')) {
+    try {
       const data = await blobToBase64(file)
-      return { mime: file.type, data, previewUrl }
+      const mime = file.type.startsWith('image/') ? file.type : 'image/jpeg'
+      return { mime, data, previewUrl }
+    } catch {
+      URL.revokeObjectURL(previewUrl)
+      throw new ScanError('image', 'Could not read that photo. Try the camera, or pick a JPEG/PNG.')
     }
-    URL.revokeObjectURL(previewUrl)
-    throw new ScanError('image', 'Could not read that photo. Try the camera, or pick a JPEG/PNG.')
   }
 }
 
@@ -310,18 +372,18 @@ function blobToBase64(blob: Blob): Promise<string> {
 
 export async function scanReceiptPhoto(opts: {
   file: File
-  apiKey: string
+  apiKey?: string
   baseCurrency: string
   categories: { id: string; name: string }[]
 }): Promise<{ scan: ReceiptScan; previewUrl: string }> {
-  const key = opts.apiKey.trim()
+  const key = (opts.apiKey ?? resolveVisionKey()).trim()
   if (!key) {
-    throw new ScanError('no-key', 'Add a Gemini API key in Settings to scan bills. You can still fill this in yourself.')
+    throw new ScanError('no-key', 'Add a Gemini API key in Scan bills to read photos. You can still fill this in yourself.')
   }
   const image = await fileToInlineImage(opts.file)
   const prompt = scanPrompt(opts.baseCurrency || DEFAULT_BASE_CURRENCY, opts.categories)
   let lastError: Error | null = null
-  for (const model of MODELS) {
+  for (const model of SCAN_MODELS) {
     try {
       const json = await generateGeminiJson(key, model, prompt, image.mime, image.data)
       const scan = normalizeReceiptScan(json, opts)
@@ -337,8 +399,37 @@ export async function scanReceiptPhoto(opts: {
   if (lastError instanceof ScanError) throw lastError
   throw new ScanError(
     'unavailable',
-    'Scanner is unavailable right now. Check the API key and network, or enter the bill manually.',
+    'Gemini could not read that photo right now. Check the API key, or enter the bill manually.',
   )
+}
+
+type GeminiPart = { text?: string; thought?: boolean }
+
+async function postGemini(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  mime: string,
+  data: string,
+  generationConfig: Record<string, unknown>,
+): Promise<Response> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: 'user',
+          parts: [{ text: prompt }, { inline_data: { mime_type: mime, data } }],
+        },
+      ],
+      generationConfig,
+    }),
+  })
 }
 
 async function generateGeminiJson(
@@ -348,29 +439,34 @@ async function generateGeminiJson(
   mime: string,
   data: string,
 ): Promise<unknown> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: prompt }, { inlineData: { mimeType: mime, data } }],
-        },
-      ],
-      generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-    }),
-  })
-  if (res.status === 400 || res.status === 403 || res.status === 401) {
+  const jsonConfig = {
+    temperature: 0,
+    responseMimeType: 'application/json',
+    maxOutputTokens: 8192,
+    thinkingConfig: { thinkingBudget: 0 },
+  }
+  let res = await postGemini(apiKey, model, prompt, mime, data, jsonConfig)
+  if (res.status === 400) {
+    res = await postGemini(apiKey, model, prompt, mime, data, {
+      temperature: 0,
+      responseMimeType: 'application/json',
+      maxOutputTokens: 8192,
+    })
+  }
+  if (res.status === 401 || res.status === 403) {
     throw new ScanError('unavailable', 'That Gemini API key was rejected. Paste a valid key from Google AI Studio.')
   }
+  if (res.status === 404) throw new Error(`missing model ${model}`)
   if (!res.ok) throw new Error(`gemini ${res.status}`)
   const body = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[]
+    candidates?: { content?: { parts?: GeminiPart[] } }[]
     error?: { message?: string }
   }
-  const text = body.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('\n') ?? ''
+  const text =
+    body.candidates?.[0]?.content?.parts
+      ?.filter((part) => !part.thought)
+      .map((part) => part.text ?? '')
+      .join('\n') ?? ''
   if (!text.trim()) throw new Error(body.error?.message || 'empty')
   try {
     return extractJsonObject(text)

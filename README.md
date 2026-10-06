@@ -16,15 +16,13 @@ On your phone on the same Wi‑Fi, you can also use your computer’s LAN addres
 ## Share with friends (other phones)
 
 1. Deploy TripTab so it has a public URL. After this repo is on GitHub, turn on **Settings → Pages → GitHub Actions**, merge to `main`, and open:
-   `https://<your-github-username>.github.io/Trip-Expenses-Tracker/`
-2. Create a trip, add friends under **Trip**, then tap **Let friends add expenses** (or the share button / **Trip → Start Live Trip / Invite Friends**).
-3. Send that link (it looks like `…/Trip-Expenses-Tracker/?t=…`). Friends open it on any phone, and expenses they add show up for everyone on the same link (the trip syncs every few seconds). Anyone with the link can edit.
+   `https://marcelldjaja7-svg.github.io/TripTab/`
+2. Create a trip, add friends under **Trip**, then tap **Let friends add expenses** (or the share button / **Trip → Invite Friends**).
+3. Send that link (it looks like `https://marcelldjaja7-svg.github.io/TripTab/?t=…`). TripTab copies the **public** GitHub Pages URL even if you tapped share on localhost, so friends’ phones can open it. A compact snapshot is packed into the link when it fits, so the trip still opens if live sync is briefly down. When someone adds, edits, or deletes a bill, person, or scanned line item, it shows up on everyone else’s phone. Anyone with the link can edit.
 
-Until the site is deployed, a live invite copied from `localhost` only works on this computer.
+Same-Wi‑Fi testing can still use the LAN URL Vite prints; the share button prefers the public site so off-network friends are not sent `localhost`.
 
-Live rooms use a public paste host so no account is required. Anyone with the link can edit. Rooms may expire if nobody opens them for a while — download JSON as a backup.
-
-Snapshot JSON export still works as a one-way backup.
+Live rooms use a public realtime channel so no account is required. Anyone with the link can edit. If a room expires, the same invite still opens the snapshot in the link — download JSON as a backup.
 
 Production build:
 
@@ -62,7 +60,8 @@ No API keys are required to use TripTab. Optional extras:
    - Tap **Out** to exclude someone from that expense. **Everyone** / **Just payer** are shortcuts.
 4. **Set conversion rates** — when an expense isn’t in IDR (or your chosen base), set e.g. “1 USD = 16200 IDR”. Edit rates anytime under **Trip**. Live fetch is a shortcut, not a requirement.
 5. **Settle up** — open the settle tab for net balances and the fewest suggested payments. Copy a payment, or tap **Log payment** after someone actually pays.
-6. **Share with friends** — tap share / **Invite Friends** for a **live** link so everyone can add expenses on their own phone. Copy a text summary or download JSON as a backup.
+6. **Share with friends** — tap share / **Invite Friends**. The link opens the trip immediately on their phone, and new bills show up for everyone in real time. Copy a text summary or download JSON as a backup.
+7. **Filter** — on Expenses, tap **Filter** to show bills for selected friends and categories. Spent and logged counts update to match.
 
 Use the sun/moon control to switch light and dark. There’s a **Bali demo trip** on the home screen if you want to click around before creating your own.
 

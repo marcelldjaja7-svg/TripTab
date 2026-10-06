@@ -1,0 +1,591 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ratesForBase } from './currencies'
+import { defaultCategories } from './demo'
+import {
+  chunkTripForLive,
+  drainLiveQueue,
+  PING_MAX,
+  liveSseUrl,
+  liveTopic,
+  parseLivePing,
+  pollLivePings,
+  publishLivePing,
+  pullLatestLiveTrip,
+  subscribeLivePings,
+  tripFromPing,
+  waitForLiveTrip,
+} from './live'
+import { compactTripForShare, decodeTripShare, encodeTripShare } from './share'
+import { mergeTrips } from './merge'
+import type { Expense, Trip } from '../types'
+
+const sample: Trip = {
+  id: 't',
+  name: 'Copenhagen',
+  emoji: '🌅',
+  startDate: '',
+  endDate: '',
+  baseCurrency: 'DKK',
+  categories: defaultCategories(),
+  rates: { DKK: 1 },
+  createdAt: 1,
+  updatedAt: 2,
+  people: [{ id: 'a', name: 'A', color: '#000' }],
+  expenses: [],
+}
+
+function bill(id: string, amount: number): Expense {
+  return {
+    id,
+    amount,
+    currency: 'DKK',
+    paidBy: 'a',
+    participantIds: ['a'],
+    splitMode: 'equal',
+    categoryId: 'food',
+    note: id,
+    date: '2026-09-18',
+    createdAt: amount,
+  }
+}
+
+function withBills(count: number, updatedAt: number): Trip {
+  return {
+    ...sample,
+    updatedAt,
+    updatedByName: `${count} bills`,
+    expenses: Array.from({ length: count }, (_, i) => bill(`e${i}`, i + 1)),
+  }
+}
+
+describe('live channel', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('builds a safe ntfy topic from a share id', () => {
+    expect(liveTopic('ff808181abcd!')).toBe('ttff808181abcd')
+    expect(liveTopic('ttabc')).toBe('ttabc')
+    expect(liveTopic('tt' + 'x'.repeat(80)).length).toBe(64)
+  })
+
+  it('replays history on the SSE URL so a late phone still gets the last bill', () => {
+    expect(liveSseUrl('ttroom')).toContain('/sse?since=all')
+    expect(liveSseUrl('ttroom', 'https://ntfy.adminforge.de')).toContain('ntfy.adminforge.de')
+  })
+
+  it('parses a live ping and ignores keepalives', () => {
+    const ping = parseLivePing({ v: 1, fp: '1', at: 9, by: 'me', p: 'nope', who: 'Alex', ids: ['e1', ''] })
+    expect(ping?.by).toBe('me')
+    expect(ping?.who).toBe('Alex')
+    expect(ping?.ids).toEqual(['e1'])
+    expect(parseLivePing({ event: 'open', topic: 'x' })).toBeNull()
+  })
+
+  it('rebuilds a trip from a ping payload', async () => {
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 1,
+      by: 'friend',
+      p: encodeTripShare(sample),
+    })
+    expect(ping).toBeTruthy()
+    const trip = await tripFromPing(ping!, 'room1')
+    expect(trip?.name).toBe('Copenhagen')
+    expect(trip?.shareId).toBe('room1')
+  })
+
+  it('does not treat a republish clock as a newer trip', async () => {
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 99_000,
+      by: 'friend',
+      who: 'Stale phone',
+      p: encodeTripShare({ ...sample, updatedAt: 2, updatedByName: 'engdjaja' }),
+    })
+    const trip = await tripFromPing(ping!, 'room1')
+    expect(trip?.updatedAt).toBe(2)
+    expect(trip?.updatedByName).toBe('engdjaja')
+  })
+
+  it('merges a compact ping payload with the full snapshot', async () => {
+    const compact = withBills(12, 40)
+    const full = withBills(43, 10)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-full-43')) {
+          return new Response(JSON.stringify(full), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 80_000,
+      by: 'friend',
+      p: encodeTripShare(compact),
+      bin: 'bin-full-43',
+    })
+    const trip = await tripFromPing(ping!, 'tt-merge-p-bin')
+    expect(trip?.expenses).toHaveLength(43)
+    expect(trip?.updatedAt).toBe(43)
+    expect(trip?.updatedByName).toBe('43 bills')
+  })
+
+  it('does not let an empty header payload replace the full snapshot', async () => {
+    const header = { ...sample, expenses: [], updatedAt: 99_000, updatedByName: 'Stale phone' }
+    const full = withBills(43, 10)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-header-43')) {
+          return new Response(JSON.stringify(full), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 80_000,
+      by: 'friend',
+      who: 'Stale phone',
+      p: encodeTripShare(header),
+      bin: 'bin-header-43',
+    })
+    const trip = await tripFromPing(ping!, 'tt-header-bin')
+    expect(trip?.expenses).toHaveLength(43)
+    expect(trip?.updatedByName).toBe('43 bills')
+    expect(trip?.updatedAt).toBe(43)
+  })
+
+  it('keeps a friend added on a header-only ping when the snapshot has the bills', async () => {
+    const header = {
+      ...sample,
+      expenses: [],
+      people: [
+        { id: 'a', name: 'A', color: '#000' },
+        { id: 'c', name: 'C', color: '#222', updatedAt: 90 },
+      ],
+      updatedAt: 90,
+      updatedByName: 'New friend',
+    }
+    const full = withBills(12, 10)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-people-12')) {
+          return new Response(JSON.stringify(full), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 90,
+      by: 'friend',
+      who: 'New friend',
+      p: encodeTripShare(header),
+      bin: 'bin-people-12',
+    })
+    const trip = await tripFromPing(ping!, 'tt-people-bin')
+    expect(trip?.expenses).toHaveLength(12)
+    expect(trip?.people.map((p) => p.id).sort()).toEqual(['a', 'c'])
+  })
+
+  it('applies bill deletes from an empty payload onto the snapshot', async () => {
+    const gone = withBills(3, 10)
+    const payload = {
+      ...gone,
+      expenses: [],
+      deletedExpenseIds: gone.expenses.map((e) => e.id),
+      updatedAt: 80,
+      updatedByName: 'Cleared',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-delete-3')) {
+          return new Response(JSON.stringify(gone), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 80,
+      by: 'friend',
+      who: 'Cleared',
+      p: encodeTripShare(payload),
+      bin: 'bin-delete-3',
+    })
+    const trip = await tripFromPing(ping!, 'tt-delete-bin')
+    expect(trip?.expenses).toHaveLength(0)
+    expect(trip?.deletedExpenseIds).toEqual(gone.expenses.map((e) => e.id))
+  })
+
+  it('drops unused conversion rates so pings fit in the live channel', () => {
+    const fat: Trip = {
+      ...sample,
+      baseCurrency: 'IDR',
+      rates: ratesForBase('IDR'),
+      expenses: [
+        {
+          id: 'e1',
+          amount: 12,
+          currency: 'USD',
+          paidBy: 'a',
+          participantIds: ['a'],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: 'Taxi',
+          date: '2026-09-01',
+          createdAt: 1,
+        },
+      ],
+    }
+    const compact = compactTripForShare(fat)
+    expect(Object.keys(compact.rates).sort()).toEqual(['IDR', 'USD'])
+    expect(encodeTripShare(fat).length).toBeLessThan(4000)
+    expect(decodeTripShare(encodeTripShare(fat))?.expenses).toHaveLength(1)
+  })
+
+  it('reads the latest ping from an ntfy poll stream', async () => {
+    const encoded = encodeTripShare(sample)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const line = JSON.stringify({
+          event: 'message',
+          message: JSON.stringify({ v: 1, fp: 'x', at: 1, by: 'friend', p: encoded }),
+        })
+        return new Response(`${line}\n`, { status: 200 })
+      }),
+    )
+    const pings = await pollLivePings('room1')
+    expect(pings).toHaveLength(1)
+    expect(pings[0]?.by).toBe('friend')
+  })
+
+  it('unions 12, 30, and 43 bill copies instead of keeping the newest ping', async () => {
+    const pingLine = (trip: Trip, at: number) =>
+      JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: `fp-${at}`, at, by: 'friend', p: encodeTripShare(trip) }),
+      })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('/json')) {
+          return new Response(
+            [pingLine(withBills(43, 50), 1), pingLine(withBills(30, 20), 2), pingLine(withBills(12, 10), 3)].join('\n'),
+            { status: 200 },
+          )
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const trip = await pullLatestLiveTrip('tt-merge-counts')
+    expect(trip?.expenses).toHaveLength(43)
+    expect(trip?.updatedByName).toBe('43 bills')
+  })
+
+  it('keeps polling until the latest bills are recorded', async () => {
+    const pingLine = (trip: Trip, at: number) =>
+      JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: `fp-${at}`, at, by: 'friend', p: encodeTripShare(trip) }),
+      })
+    let round = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (!String(input).includes('/json')) return new Response('no', { status: 404 })
+        round += 1
+        const body = round < 3 ? pingLine(withBills(12, 10), 1) : pingLine(withBills(43, 50), 2)
+        return new Response(body, { status: 200 })
+      }),
+    )
+    const trip = await waitForLiveTrip('tt-wait-latest', 4000)
+    expect(trip?.expenses).toHaveLength(43)
+  })
+
+  it('never posts an oversized live ping body', async () => {
+    const fat = withBills(40, 9)
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Uploaded receipt ${i} ${'x'.repeat(120)}`,
+    }))
+    expect(encodeTripShare(fat).length).toBeGreaterThan(PING_MAX)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('ntfy') && (init?.method ?? 'GET') === 'POST') {
+        const body = String(init?.body ?? '')
+        expect(body.length).toBeLessThanOrEqual(PING_MAX)
+        const ping = JSON.parse(body) as { p?: string; bin?: string }
+        if (ping.p) expect(decodeTripShare(ping.p)?.expenses.length ?? 0).toBeLessThan(40)
+        return new Response('ok', { status: 200 })
+      }
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await publishLivePing('tt-fat-ping', fat, 'bin-fat')
+    await drainLiveQueue('tt-fat-ping')
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('ntfy'))).toBe(true)
+  })
+
+  it('rebuilds a 45-bill trip from live chunks', () => {
+    const fat = withBills(45, 9)
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Logged receipt ${i} ${'x'.repeat(80)}`,
+    }))
+    const chunks = chunkTripForLive(fat)
+    expect(chunks.length).toBeGreaterThan(1)
+    for (const [i, chunk] of chunks.entries()) {
+      expect(
+        JSON.stringify({
+          v: 1,
+          p: encodeTripShare(chunk),
+          fp: `${fat.updatedAt}-${fat.expenses.length}-${i}/${chunks.length}`,
+          at: 9_999_999_999_999,
+          by: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+          who: '45 bills',
+          n: 45,
+          ids: chunk.expenses.map((expense) => expense.id),
+        }).length,
+      ).toBeLessThanOrEqual(PING_MAX)
+    }
+    const rebuilt = chunks.reduce((acc, chunk) => mergeTrips(acc, chunk))
+    expect(rebuilt.expenses).toHaveLength(45)
+  })
+
+  it('publishes chunks that reconstruct a 45-bill trip without bytebin', async () => {
+    const fat = withBills(45, 9)
+    fat.updatedByName = 'engdjaja'
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Logged receipt ${i} ${'x'.repeat(80)}`,
+    }))
+    const posts: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('ntfy') && method === 'POST') {
+          const body = String(init?.body ?? '')
+          expect(body.length).toBeLessThanOrEqual(PING_MAX)
+          posts.push(body)
+          return new Response('ok', { status: 200 })
+        }
+        if (url.includes('/json')) {
+          const lines = posts.map((body) => JSON.stringify({ event: 'message', message: body }))
+          return new Response(lines.join('\n'), { status: 200 })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    await publishLivePing('tt-chunk-45', fat)
+    await drainLiveQueue('tt-chunk-45')
+    expect(posts.length).toBeGreaterThan(1)
+    const trip = await pullLatestLiveTrip('tt-chunk-45')
+    expect(trip?.expenses).toHaveLength(45)
+  })
+
+  it('unions a 45-bill phone with a 47-bill laptop from chunked pings', async () => {
+    const phone = withBills(45, 20)
+    phone.updatedByName = 'engdjaja'
+    phone.expenses = phone.expenses.map((e, i) => ({
+      ...e,
+      id: `phone-${i}`,
+      note: i === 44 ? 'test' : `Phone bill ${i}`,
+    }))
+    const laptop = withBills(47, 10)
+    laptop.updatedByName = 'nathanaelsp'
+    laptop.expenses = laptop.expenses.map((e, i) => ({
+      ...e,
+      id: i < 44 ? `phone-${i}` : `laptop-${i}`,
+      note: `Laptop bill ${i}`,
+    }))
+    const posts: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('ntfy') && method === 'POST') {
+          posts.push(String(init?.body ?? ''))
+          return new Response('ok', { status: 200 })
+        }
+        if (url.includes('/json')) {
+          const lines = posts.map((body) => JSON.stringify({ event: 'message', message: body }))
+          return new Response(lines.join('\n'), { status: 200 })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    await publishLivePing('tt-chunk-union', phone)
+    await drainLiveQueue('tt-chunk-union')
+    await publishLivePing('tt-chunk-union', laptop)
+    await drainLiveQueue('tt-chunk-union')
+    const trip = await pullLatestLiveTrip('tt-chunk-union')
+    const ids = new Set(trip?.expenses.map((e) => e.id))
+    expect(ids.has('phone-44')).toBe(true)
+    expect(ids.has('laptop-46')).toBe(true)
+    expect(trip?.expenses).toHaveLength(48)
+  })
+
+  it('retries a 429 ntfy post so every bill still reconstructs', async () => {
+    const fat = withBills(45, 9)
+    fat.updatedByName = 'friend'
+    fat.expenses = fat.expenses.map((e, i) => ({
+      ...e,
+      note: `Logged receipt ${i} ${'x'.repeat(80)}`,
+    }))
+    let ntfyPosts = 0
+    const bodies: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url.includes('ntfy') && method === 'POST') {
+          ntfyPosts += 1
+          const body = String(init?.body ?? '')
+          expect(body.length).toBeLessThanOrEqual(PING_MAX)
+          if (ntfyPosts === 1) return new Response('rate limited', { status: 429 })
+          bodies.push(body)
+          return new Response('ok', { status: 200 })
+        }
+        if (url.includes('/json')) {
+          const lines = bodies.map((row) => JSON.stringify({ event: 'message', message: row }))
+          return new Response(lines.join('\n'), { status: 200 })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    await publishLivePing('tt-retry-429', fat)
+    await drainLiveQueue('tt-retry-429')
+    expect(ntfyPosts).toBeGreaterThan(1)
+    const trip = await pullLatestLiveTrip('tt-retry-429')
+    expect(trip?.expenses).toHaveLength(45)
+  })
+
+  it('still delivers a later snapshot ping after an empty fingerprint ping', async () => {
+    class FakeSource {
+      static CLOSED = 2
+      onmessage: ((event: { data: string }) => void) | null = null
+      onerror: (() => void) | null = null
+      onopen: (() => void) | null = null
+      readyState = 1
+      constructor() {
+        FakeSource.current = this
+      }
+      static current: FakeSource | null = null
+      close() {
+        this.readyState = 2
+      }
+    }
+    vi.stubGlobal('EventSource', FakeSource)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 200 })))
+    const seen: Array<{ fp: string; bin?: string; p?: string }> = []
+    const unsub = subscribeLivePings('tt-bin-followup', (ping) => {
+      seen.push({ fp: ping.fp, bin: ping.bin, p: ping.p })
+    })
+    FakeSource.current?.onopen?.()
+    FakeSource.current?.onmessage?.({
+      data: JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: 'upload-1', at: 1, by: 'friend' }),
+      }),
+    })
+    FakeSource.current?.onmessage?.({
+      data: JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: 'upload-1', at: 2, by: 'friend', bin: 'snap-uploaded' }),
+      }),
+    })
+    expect(seen).toEqual([{ fp: 'upload-1', bin: 'snap-uploaded', p: undefined }])
+    unsub()
+  })
+
+  it('does not wait for a hung ntfy.sh before finishing a live publish', async () => {
+    let resolveHang: (() => void) | undefined
+    const hang = new Promise<void>((resolve) => {
+      resolveHang = resolve
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('ntfy.sh')) {
+        await hang
+        return new Response('ok', { status: 200 })
+      }
+      if (url.includes('ntfy')) return new Response('ok', { status: 200 })
+      return new Response('no', { status: 404 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const start = Date.now()
+    const { publishLivePing } = await import('./live')
+    await publishLivePing('tt-hang-room', sample)
+    expect(Date.now() - start).toBeLessThan(1500)
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('adminforge'))).toBe(true)
+    resolveHang?.()
+  })
+
+  it('delivers an ntfy SSE envelope to subscribers', async () => {
+    const encoded = encodeTripShare(sample)
+    const opened: string[] = []
+    class FakeSource {
+      static CLOSED = 2
+      onmessage: ((event: { data: string }) => void) | null = null
+      onerror: (() => void) | null = null
+      readyState = 1
+      constructor(url: string) {
+        opened.push(url)
+        FakeSource.current = this
+      }
+      static current: FakeSource | null = null
+      close() {
+        this.readyState = 2
+      }
+    }
+    vi.stubGlobal('EventSource', FakeSource)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 200 })),
+    )
+    const seen: string[] = []
+    const unsub = subscribeLivePings('tt-sse-room', (ping) => {
+      seen.push(ping.by)
+    })
+    expect(opened.some((url) => url.includes('since=all'))).toBe(true)
+    expect(opened.some((url) => url.includes('adminforge') || url.includes('envs.net'))).toBe(true)
+    FakeSource.current?.onmessage?.({
+      data: JSON.stringify({
+        event: 'message',
+        message: JSON.stringify({ v: 1, fp: 'live-1', at: 1, by: 'friend', p: encoded }),
+      }),
+    })
+    expect(seen).toEqual(['friend'])
+    unsub()
+  })
+})

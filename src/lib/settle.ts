@@ -1,7 +1,16 @@
 import type { Expense, PersonBalance, Transfer, Trip } from '../types'
 import { currencyDecimals } from './currencies'
-import { expenseShares, fromMinor, toBaseMinor } from './money'
+import {
+  allocateProportional,
+  formatMoney,
+  fromMinor,
+  isSettlement,
+  participantIdsOf,
+  splitWeights,
+  toBaseMinor,
+} from './money'
 import { uid } from './utils'
+import { todayISO } from './dates'
 
 const EPS = 1
 
@@ -9,43 +18,57 @@ type MinorBalance = {
   personId: string
   paid: number
   share: number
+  settled: number
+  funded: number
   net: number
+}
+
+/**
+ * Each participant's portion of a bill, in base-currency minor units.
+ * Equal = even weights. Custom amounts and percents are weights, so each
+ * person is billed in proportion to what they have to pay on that bill.
+ */
+export function expenseShareMinor(trip: Trip, expense: Expense): Map<string, number> {
+  const ids = participantIdsOf(expense)
+  const totalMinor = toBaseMinor(expense.amount, expense.currency, trip)
+  if (ids.length === 0 || totalMinor === 0) return new Map()
+  return allocateProportional(ids, splitWeights(expense, ids), totalMinor)
 }
 
 export function computeMinorBalances(trip: Trip): MinorBalance[] {
   const paid = new Map<string, number>()
   const share = new Map<string, number>()
+  const settled = new Map<string, number>()
   for (const person of trip.people) {
     paid.set(person.id, 0)
     share.set(person.id, 0)
+    settled.set(person.id, 0)
   }
 
   for (const expense of trip.expenses) {
     const totalMinor = toBaseMinor(expense.amount, expense.currency, trip)
-    paid.set(expense.paidBy, (paid.get(expense.paidBy) ?? 0) + totalMinor)
-
-    const parts = expenseShares(expense)
-    const partSum = Object.values(parts).reduce((s, n) => s + n, 0)
-    if (partSum <= 0 || expense.participantIds.length === 0) continue
-
-    let allocated = 0
-    expense.participantIds.forEach((id, index) => {
-      const last = index === expense.participantIds.length - 1
-      let minor: number
-      if (last) {
-        minor = totalMinor - allocated
-      } else {
-        minor = Math.round((parts[id] / partSum) * totalMinor)
-        allocated += minor
+    if (isSettlement(trip, expense)) {
+      const ids = participantIdsOf(expense)
+      const recipients = ids.filter((id) => id !== expense.paidBy)
+      const targets = recipients.length > 0 ? recipients : ids
+      const portions = expenseShareMinor(trip, { ...expense, participantIds: targets })
+      settled.set(expense.paidBy, (settled.get(expense.paidBy) ?? 0) + totalMinor)
+      for (const [id, minor] of portions) {
+        settled.set(id, (settled.get(id) ?? 0) - minor)
       }
+      continue
+    }
+    paid.set(expense.paidBy, (paid.get(expense.paidBy) ?? 0) + totalMinor)
+    for (const [id, minor] of expenseShareMinor(trip, expense)) {
       share.set(id, (share.get(id) ?? 0) + minor)
-    })
+    }
   }
 
   return trip.people.map((person) => {
     const p = paid.get(person.id) ?? 0
     const s = share.get(person.id) ?? 0
-    return { personId: person.id, paid: p, share: s, net: p - s }
+    const x = settled.get(person.id) ?? 0
+    return { personId: person.id, paid: p, share: s, settled: x, funded: p + x, net: p - s + x }
   })
 }
 
@@ -55,8 +78,42 @@ export function computeBalances(trip: Trip): PersonBalance[] {
     personId: b.personId,
     paid: fromMinor(b.paid, decimals),
     share: fromMinor(b.share, decimals),
+    settled: fromMinor(b.settled, decimals),
+    funded: fromMinor(b.funded, decimals),
     net: fromMinor(b.net, decimals),
   }))
+}
+
+/** Amount this person paid for group purchases — settle-up transfers do not count. */
+export function personSpendPaid(trip: Trip, personId: string): number {
+  return computeBalances(trip).find((row) => row.personId === personId)?.paid ?? 0
+}
+
+/** This person's split of the trip — what they have to pay after equal / custom / percent. */
+export function personTripShare(trip: Trip, personId: string): number {
+  return computeBalances(trip).find((row) => row.personId === personId)?.share ?? 0
+}
+
+/** What they have paid toward the trip after settle-up (cards + transfers). Equals share when settled. */
+export function personFunded(trip: Trip, personId: string): number {
+  return computeBalances(trip).find((row) => row.personId === personId)?.funded ?? 0
+}
+
+export function shareOfTripPercent(share: number, spent: number): number {
+  if (spent <= 0) return 0
+  return (share / spent) * 100
+}
+
+export function formatSharePercent(share: number, spent: number): string {
+  const pct = shareOfTripPercent(share, spent)
+  const rounded = Math.round(pct * 10) / 10
+  return `${Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)}%`
+}
+
+export function describeBalance(b: PersonBalance, currency: string): string {
+  if (Math.abs(b.net) < 0.005) return 'Settled'
+  if (b.net > 0) return `Is owed ${formatMoney(b.net, currency)}`
+  return `Owes ${formatMoney(-b.net, currency)}`
 }
 
 export function suggestedTransfers(trip: Trip): Transfer[] {
@@ -132,7 +189,7 @@ export function settlementExpense(
     splitMode: 'equal',
     categoryId: settlement.id,
     note: 'Settle up',
-    date: new Date().toISOString().slice(0, 10),
+    date: todayISO(),
     createdAt: Date.now(),
   }
 }

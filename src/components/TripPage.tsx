@@ -1,13 +1,17 @@
 import { ArrowLeft, Camera, Plus, Receipt, Scale, Settings2, Share } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
-import { convertedLabel, formatMoney, isSettlement, splitLabel, tripTotalBase } from '../lib/money'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { formatExpenseDate, liveUpdateLabel, parseExpenseDate } from '../lib/dates'
+import { EMPTY_FILTER, filterExpenses, isFilterActive, type ExpenseFilter } from '../lib/filter'
+import { convertedLabel, formatMoney, isSettlement, splitLabel, tripBillCount, tripPaymentExpenses, tripTotalBase } from '../lib/money'
 import { cn } from '../lib/utils'
 import { useStore } from '../state'
 import type { Expense, Trip } from '../types'
 import { BalancesView } from './BalancesView'
+import { ExpenseFilterBar } from './ExpenseFilters'
 import { ExpenseForm } from './ExpenseForm'
+import { TripHero } from './TripHero'
 import { TripSettings } from './TripSettings'
-import { Avatar, Button, Chevron, Group, GroupRow, Screen, SectionLabel } from './ui'
+import { Avatar, Button, Chevron, Group, GroupRow, Screen, SectionLabel, ThemeToggle } from './ui'
 
 type Tab = 'expenses' | 'settle' | 'settings'
 
@@ -17,21 +21,53 @@ export function TripPage({ trip }: { trip: Trip }) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
   const [preferScan, setPreferScan] = useState(false)
+  const [filter, setFilter] = useState<ExpenseFilter>(EMPTY_FILTER)
+  const [flashIds, setFlashIds] = useState<Set<string>>(() => new Set())
+  const seenExpenseIds = useRef<Set<string> | null>(null)
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const tick = window.setInterval(() => setNow(Date.now()), 15000)
+    return () => window.clearInterval(tick)
+  }, [])
+
+  useEffect(() => {
+    const ids = new Set(trip.expenses.map((e) => e.id))
+    const prev = seenExpenseIds.current
+    seenExpenseIds.current = ids
+    if (!prev) return
+    const added = [...ids].filter((id) => !prev.has(id))
+    if (added.length === 0) return
+    setFlashIds(new Set(added))
+    const handle = window.setTimeout(() => setFlashIds(new Set()), 1600)
+    return () => window.clearTimeout(handle)
+  }, [trip.expenses])
 
   const peopleById = useMemo(() => new Map(trip.people.map((p) => [p.id, p])), [trip.people])
   const cats = useMemo(() => new Map(trip.categories.map((c) => [c.id, c])), [trip.categories])
+  const visibleExpenses = useMemo(() => filterExpenses(trip.expenses, filter), [trip.expenses, filter])
+  const filtering = isFilterActive(filter)
+  const showFiltered = tab === 'expenses' && filtering
+  const spent = tripTotalBase(trip, showFiltered ? visibleExpenses : trip.expenses)
+  const loggedCount = tripBillCount(trip, showFiltered ? visibleExpenses : trip.expenses)
+  const paymentCount = tripPaymentExpenses(trip, showFiltered ? visibleExpenses : trip.expenses).length
+  const showingPaymentsOnly = showFiltered && loggedCount === 0 && paymentCount > 0
 
   const grouped = useMemo(() => {
     const map = new Map<string, Expense[]>()
-    const sorted = [...trip.expenses].sort((a, b) => (b.date || '').localeCompare(a.date || '') || b.createdAt - a.createdAt)
+    const sorted = [...visibleExpenses].sort(
+      (a, b) =>
+        (parseExpenseDate(b.date) || b.date || '').localeCompare(parseExpenseDate(a.date) || a.date || '') ||
+        b.createdAt - a.createdAt,
+    )
     for (const e of sorted) {
-      const key = e.date || 'Undated'
+      const key = parseExpenseDate(e.date) || e.date || 'Undated'
       const list = map.get(key) ?? []
       list.push(e)
       map.set(key, list)
     }
     return [...map.entries()]
-  }, [trip.expenses])
+  }, [visibleExpenses])
 
   const openNew = (scan = false) => {
     setEditing(null)
@@ -71,6 +107,7 @@ export function TripPage({ trip }: { trip: Trip }) {
           <TabBtn on={tab === 'settings'} onClick={() => setTab('settings')} icon={<Settings2 size={15} strokeWidth={1.75} />} label="Trip" compact />
         </div>
         <div className="mr-1 flex items-center gap-1">
+          <ThemeToggle />
           <button
             type="button"
             onClick={() => void shareWithFriends(trip)}
@@ -95,45 +132,43 @@ export function TripPage({ trip }: { trip: Trip }) {
       </div>
 
       <header className="pt-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="large-title flex items-center gap-2">
-              <span className="text-[28px] leading-none">{trip.emoji}</span>
-              <span className="truncate">{trip.name}</span>
-            </h1>
-            <p className="mt-1 text-[15px] text-[var(--muted)]">
-              {trip.startDate && trip.endDate ? `${trip.startDate} → ${trip.endDate}` : trip.startDate || 'Open dates'}
-              {' · '}
-              {trip.people.length} {trip.people.length === 1 ? 'person' : 'people'}
-              {' · '}
-              {trip.baseCurrency}
+        <TripHero
+          trip={trip}
+          onDestinationChange={(destinationId) => saveTrip({ ...trip, destinationId })}
+        />
+        {trip.shareId ? (
+          <div className="mt-3 flex items-center gap-2 rounded-[12px] bg-[var(--grouped)] px-4 py-2.5">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-400" />
+            <p className="min-w-0 flex-1 text-[13px] font-medium">
+              Live
+              <span className="mx-1.5 text-[var(--muted)]">·</span>
+              <span className="text-[var(--muted)]">{liveUpdateLabel(trip, now)}</span>
             </p>
-            {trip.shareId && (
-              <p className="mt-2 inline-flex items-center rounded-full bg-[var(--accent)]/15 px-2.5 py-1 text-[12px] font-semibold text-[var(--accent)]">
-                Live · friends can add expenses
-              </p>
-            )}
           </div>
-        </div>
-
+        ) : null}
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div className="rounded-[12px] bg-[var(--grouped)] px-4 py-3">
-            <p className="text-[13px] text-[var(--muted)]">Spent</p>
+            <p className="text-[13px] text-[var(--muted)]">{showFiltered ? 'Filtered' : 'Spent'}</p>
             <p className="mt-0.5 text-[22px] font-semibold tracking-tight tabular-nums">
-              {formatMoney(tripTotalBase(trip), trip.baseCurrency)}
+              {formatMoney(spent, trip.baseCurrency)}
             </p>
           </div>
           <div className="rounded-[12px] bg-[var(--grouped)] px-4 py-3">
-            <p className="text-[13px] text-[var(--muted)]">Logged</p>
+            <p className="text-[13px] text-[var(--muted)]">{showFiltered ? 'Showing' : 'Logged'}</p>
             <p className="mt-0.5 text-[22px] font-semibold tracking-tight">
-              {trip.expenses.length} {trip.expenses.length === 1 ? 'bill' : 'bills'}
+              {showingPaymentsOnly
+                ? `${paymentCount} ${paymentCount === 1 ? 'payment' : 'payments'}`
+                : `${loggedCount} ${loggedCount === 1 ? 'bill' : 'bills'}${showFiltered ? ` of ${tripBillCount(trip)}` : ''}`}
             </p>
+            {!showFiltered && paymentCount > 0 ? (
+              <p className="mt-0.5 text-[12px] text-[var(--muted)]">
+                {paymentCount} settle-up {paymentCount === 1 ? 'payment' : 'payments'}
+              </p>
+            ) : null}
           </div>
         </div>
-        {trip.isDemo && (
-          <p className="mt-3 rounded-[12px] bg-[var(--fill)] px-3.5 py-2.5 text-[13px] text-[var(--muted)]">
-            Sample Bali data so you can look around. Start a real trip anytime — or edit this one.
-          </p>
+        {tab === 'expenses' && trip.expenses.length > 0 && (
+          <ExpenseFilterBar trip={trip} filter={filter} onChange={setFilter} />
         )}
 
         {tab === 'expenses' && (
@@ -177,7 +212,7 @@ export function TripPage({ trip }: { trip: Trip }) {
       <div className="mt-2">
         {tab === 'expenses' && (
           <div>
-            {grouped.length === 0 ? (
+            {trip.expenses.length === 0 ? (
               <div className="mt-8 flex flex-col items-center px-6 text-center">
                 <span className="grid h-16 w-16 place-items-center rounded-[18px] bg-[var(--grouped)] text-[var(--muted)]">
                   <Receipt size={28} strokeWidth={1.5} />
@@ -191,10 +226,21 @@ export function TripPage({ trip }: { trip: Trip }) {
                   <Plus size={16} strokeWidth={2.25} /> Add Expense
                 </Button>
               </div>
+            ) : grouped.length === 0 ? (
+              <div className="mt-8 flex flex-col items-center px-6 text-center">
+                <span className="grid h-16 w-16 place-items-center rounded-[18px] bg-[var(--grouped)] text-[var(--muted)]">
+                  <Receipt size={28} strokeWidth={1.5} />
+                </span>
+                <p className="title-3 mt-4">Nothing matches</p>
+                <p className="mt-1 text-[15px] text-[var(--muted)]">Try another friend or category, or clear the filter.</p>
+                <Button className="mt-5" variant="secondary" onClick={() => setFilter(EMPTY_FILTER)}>
+                  Clear Filter
+                </Button>
+              </div>
             ) : (
               grouped.map(([date, items]) => (
                 <section key={date}>
-                  <SectionLabel>{prettyDate(date)}</SectionLabel>
+                  <SectionLabel>{formatExpenseDate(date)}</SectionLabel>
                   <Group>
                     {items.map((expense) => {
                       const payer = peopleById.get(expense.paidBy)
@@ -211,7 +257,7 @@ export function TripPage({ trip }: { trip: Trip }) {
                             setEditing(expense)
                             setFormOpen(true)
                           }}
-                          className="py-3"
+                          className={flashIds.has(expense.id) ? 'row-flash py-3' : 'py-3'}
                         >
                           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-[var(--fill)] text-[18px]">
                             {cat?.emoji ?? '📦'}
@@ -263,6 +309,7 @@ export function TripPage({ trip }: { trip: Trip }) {
 
         {tab === 'settings' && (
           <TripSettings
+            key={trip.id}
             trip={trip}
             onChange={saveTrip}
             onDeleteTrip={() => {
@@ -342,10 +389,4 @@ function TabBtn({
       {label}
     </button>
   )
-}
-
-function prettyDate(iso: string): string {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso
-  const d = new Date(`${iso}T12:00:00`)
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }

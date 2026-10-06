@@ -1,13 +1,19 @@
-import { Copy, Download, RefreshCw, Share, Trash2, Upload } from 'lucide-react'
+import { Copy, Download, FileSpreadsheet, RefreshCw, Share, Trash2, Upload, User } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { PERSON_COLORS, TRIP_EMOJIS } from '../lib/colors'
-import { convertRatesToNewBase, CURRENCIES, fetchLiveRates } from '../lib/currencies'
+import { convertRatesToNewBase, fetchLiveRates } from '../lib/currencies'
+import { DESTINATIONS } from '../lib/destinations'
+import { liveUpdateLabel } from '../lib/dates'
+import { downloadImportTemplate, downloadTripExcel } from '../lib/excel'
+import { importTripExcel } from '../lib/excelImport'
+import { loadMyPersonId } from '../lib/identity'
 import { inverseRate, roundTo } from '../lib/money'
 import { downloadJson, shareUrlForTrip, slugify, tripSummaryText } from '../lib/share'
 import { normalizeAppData, normalizeTrip } from '../lib/storage'
 import { cn, uid } from '../lib/utils'
 import { useStore } from '../state'
 import type { Trip } from '../types'
+import { CurrencyPicker } from './CurrencyPicker'
 import { ScanSettings } from './ScanSettings'
 import { Avatar, Group, GroupRow, SectionLabel, Select, TextInput } from './ui'
 
@@ -22,13 +28,15 @@ export function TripSettings({
   onDeleteTrip: () => void
   onNotify: (message: string) => void
 }) {
-  const { shareWithFriends } = useStore()
+  const { shareWithFriends, refreshLive, setMyPerson } = useStore()
   const [fetching, setFetching] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [me, setMe] = useState(() => loadMyPersonId(trip.id) ?? trip.people[0]?.id ?? '')
   const [newFriend, setNewFriend] = useState('')
   const [newCat, setNewCat] = useState('')
 
   const usedCurrencies = Array.from(
-    new Set([trip.baseCurrency, ...trip.expenses.map((e) => e.currency), ...CURRENCIES.map((c) => c.code)]),
+    new Set([trip.baseCurrency, ...trip.expenses.map((e) => e.currency)]),
   )
 
   const copySummary = async () => {
@@ -39,7 +47,7 @@ export function TripSettings({
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(shareUrlForTrip(trip))
-      onNotify('Share link copied')
+      onNotify('Invite link copied')
     } catch {
       onNotify('Could not copy link')
     }
@@ -111,21 +119,33 @@ export function TripSettings({
         </GroupRow>
         <GroupRow>
           <span className="w-[5.5rem] shrink-0 text-[17px] text-[var(--muted)]">Currency</span>
-          <Select
-            className="rounded-none bg-transparent px-0 py-0 text-right dark:bg-transparent"
+          <CurrencyPicker
             value={trip.baseCurrency}
-            onChange={(e) => {
-              const base = e.target.value
+            onChange={(base) =>
               onChange({
                 ...trip,
                 baseCurrency: base,
                 rates: convertRatesToNewBase(trip.rates, base),
               })
-            }}
+            }
+          />
+        </GroupRow>
+        <GroupRow>
+          <span className="w-[5.5rem] shrink-0 text-[17px] text-[var(--muted)]">Place</span>
+          <Select
+            className="rounded-none bg-transparent px-0 py-0 text-right dark:bg-transparent"
+            value={trip.destinationId ?? ''}
+            onChange={(e) =>
+              onChange({
+                ...trip,
+                destinationId: e.target.value || undefined,
+              })
+            }
           >
-            {CURRENCIES.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
+            <option value="">Match from name</option>
+            {DESTINATIONS.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.place}
               </option>
             ))}
           </Select>
@@ -143,7 +163,9 @@ export function TripSettings({
               onChange={(e) =>
                 onChange({
                   ...trip,
-                  people: trip.people.map((x) => (x.id === p.id ? { ...x, name: e.target.value } : x)),
+                  people: trip.people.map((x) =>
+                    x.id === p.id ? { ...x, name: e.target.value, updatedAt: Date.now() } : x,
+                  ),
                 })
               }
             />
@@ -161,7 +183,9 @@ export function TripSettings({
                   onClick={() =>
                     onChange({
                       ...trip,
-                      people: trip.people.map((x) => (x.id === p.id ? { ...x, color: c } : x)),
+                      people: trip.people.map((x) =>
+                        x.id === p.id ? { ...x, color: c, updatedAt: Date.now() } : x,
+                      ),
                     })
                   }
                 />
@@ -176,7 +200,11 @@ export function TripSettings({
                   onNotify('This friend is on an expense — remove those first')
                   return
                 }
-                onChange({ ...trip, people: trip.people.filter((x) => x.id !== p.id) })
+                onChange({
+                  ...trip,
+                  people: trip.people.filter((x) => x.id !== p.id),
+                  deletedPersonIds: [...new Set([...(trip.deletedPersonIds ?? []), p.id])],
+                })
               }}
             >
               <Trash2 size={16} strokeWidth={1.75} />
@@ -194,7 +222,10 @@ export function TripSettings({
                 const color = PERSON_COLORS[trip.people.length % PERSON_COLORS.length]
                 onChange({
                   ...trip,
-                  people: [...trip.people, { id: uid(), name: newFriend.trim(), color }],
+                  people: [
+                    ...trip.people,
+                    { id: uid(), name: newFriend.trim(), color, updatedAt: Date.now() },
+                  ],
                 })
                 setNewFriend('')
               }
@@ -208,7 +239,10 @@ export function TripSettings({
               const color = PERSON_COLORS[trip.people.length % PERSON_COLORS.length]
               onChange({
                 ...trip,
-                people: [...trip.people, { id: uid(), name: newFriend.trim(), color }],
+                people: [
+                  ...trip.people,
+                  { id: uid(), name: newFriend.trim(), color, updatedAt: Date.now() },
+                ],
               })
               setNewFriend('')
             }}
@@ -296,7 +330,6 @@ export function TripSettings({
         </GroupRow>
         {usedCurrencies
           .filter((code, i, arr) => arr.indexOf(code) === i && code !== trip.baseCurrency)
-          .slice(0, 18)
           .map((code) => {
             const rate = trip.rates[code] ?? 1
             return (
@@ -322,11 +355,33 @@ export function TripSettings({
       <SectionLabel>Scan bills</SectionLabel>
       <ScanSettings onNotify={onNotify} />
 
-      <SectionLabel>Share with friends</SectionLabel>
+      <SectionLabel>Live sync</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        Send a live link. Anyone who opens it can add expenses on their own phone. Anyone with the link can edit.
+        {trip.shareId
+          ? `Live is on. Every friend on this link publishes — not only the host. Large logs queue piece-by-piece until every bill is reflected. ${liveUpdateLabel(trip)}. If Spent or Logged still differ, tap Sync now.`
+          : 'Start a live trip to share bills in real time. Pick who you are on this phone first.'}
       </p>
       <Group>
+        <GroupRow className="py-3">
+          <User size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="w-[5.5rem] shrink-0 text-[17px] text-[var(--muted)]">I am</span>
+          <Select
+            className="rounded-none bg-transparent px-0 py-0 text-right dark:bg-transparent"
+            value={me}
+            onChange={(e) => {
+              const id = e.target.value
+              setMe(id)
+              setMyPerson(trip.id, id)
+            }}
+          >
+            {trip.people.length === 0 ? <option value="">Add friends first</option> : null}
+            {trip.people.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.name}
+              </option>
+            ))}
+          </Select>
+        </GroupRow>
         <GroupRow
           onClick={() => {
             void shareWithFriends(trip)
@@ -335,17 +390,102 @@ export function TripSettings({
           <Share size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
           <span className="flex-1 text-[17px]">{trip.shareId ? 'Invite Friends' : 'Start Live Trip'}</span>
         </GroupRow>
+        {trip.shareId ? (
+          <GroupRow
+            onClick={() => {
+              if (syncing) return
+              setSyncing(true)
+              void refreshLive(trip).finally(() => setSyncing(false))
+            }}
+          >
+            <RefreshCw size={16} strokeWidth={1.75} className={cn('text-[var(--accent)]', syncing && 'animate-spin')} />
+            <span className="flex-1 text-[17px]">{syncing ? 'Syncing…' : 'Sync now'}</span>
+          </GroupRow>
+        ) : null}
+        <GroupRow onClick={() => void copyLink()}>
+          <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Copy Invite Link</span>
+        </GroupRow>
+      </Group>
+
+      <SectionLabel>Excel</SectionLabel>
+      <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
+        Download the template, fill one bill per row, then import. Names should match Friends. You can also import a
+        file you already exported.
+      </p>
+      <Group>
+        <GroupRow
+          onClick={() => {
+            void downloadImportTemplate(trip)
+              .then((how) => {
+                onNotify(
+                  how === 'share' ? 'Template ready — fill Expenses, then import' : 'Template downloaded',
+                )
+              })
+              .catch(() => onNotify('Could not download the template'))
+          }}
+        >
+          <Download size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Download Excel template</span>
+        </GroupRow>
+        <label className="row-sep relative flex min-h-[44px] w-full cursor-pointer items-center gap-3 px-4 py-2.5">
+          <Upload size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Import Excel</span>
+          <input
+            type="file"
+            accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0]
+              e.target.value = ''
+              if (!file) return
+              try {
+                const csv = /\.csv$/i.test(file.name) || file.type.includes('csv')
+                const input = csv ? await file.text() : new Uint8Array(await file.arrayBuffer())
+                const result = await importTripExcel(trip, input)
+                if (result.added === 0) {
+                  onNotify(result.warnings[0] ?? 'No new bills in that file')
+                  return
+                }
+                onChange(result.trip)
+                const extra = result.skipped ? ` · ${result.skipped} skipped` : ''
+                onNotify(`Added ${result.added} bill${result.added === 1 ? '' : 's'} from Excel${extra}`)
+              } catch {
+                onNotify('Could not read that Excel file. Use the template.')
+              }
+            }}
+          />
+        </label>
+        <GroupRow
+          onClick={() => {
+            void downloadTripExcel(trip)
+              .then((how) => {
+                onNotify(
+                  how === 'share'
+                    ? 'Spreadsheet ready — open in Excel or Numbers'
+                    : 'Excel file downloaded',
+                )
+              })
+              .catch(() => onNotify('Could not export Excel'))
+          }}
+        >
+          <FileSpreadsheet size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
+          <span className="flex-1 text-[17px]">Export to Excel</span>
+        </GroupRow>
+      </Group>
+
+      <SectionLabel>Export</SectionLabel>
+      <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
+        JSON is a full backup if you need to import later.
+      </p>
+      <Group>
         <GroupRow onClick={() => void copySummary()}>
           <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
           <span className="flex-1 text-[17px]">Copy Summary</span>
         </GroupRow>
-        <GroupRow onClick={() => void copyLink()}>
-          <Copy size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
-          <span className="flex-1 text-[17px]">Copy Snapshot Link</span>
-        </GroupRow>
         <GroupRow onClick={() => downloadJson(`${slugify(trip.name)}.triptab.json`, trip)}>
           <Download size={16} strokeWidth={1.75} className="text-[var(--accent)]" />
-          <span className="flex-1 text-[17px]">Download Trip</span>
+          <span className="flex-1 text-[17px]">Download Trip JSON</span>
         </GroupRow>
         <label className="row-sep relative flex min-h-[44px] w-full cursor-pointer items-center gap-3 px-4 py-2.5">
           <Upload size={16} strokeWidth={1.75} className="text-[var(--accent)]" />

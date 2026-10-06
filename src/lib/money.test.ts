@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { equalPercents, equalShares, percentToAmounts, percentsMatch100, sharesMatchTotal } from './money'
+import { equalPercents, equalShares, expenseShares, percentToAmounts, percentsMatch100, sharesMatchTotal, tripBillCount, tripTotalBase } from './money'
 import { ratesForBase } from './currencies'
+import { defaultCategories } from './demo'
+import type { Expense, Trip } from '../types'
 
 describe('equalShares', () => {
   it('splits cents without losing remainder', () => {
@@ -31,6 +33,44 @@ describe('percent split', () => {
   })
 })
 
+describe('proportional expenseShares', () => {
+  it('keeps custom amounts that already add up to the bill', () => {
+    const shares = expenseShares({
+      id: 'e',
+      amount: 376,
+      currency: 'USD',
+      paidBy: 'a',
+      participantIds: ['a', 'b'],
+      splitMode: 'custom',
+      shares: { a: 183, b: 193 },
+      categoryId: 'food',
+      note: '',
+      date: '2026-09-17',
+      createdAt: 1,
+    })
+    expect(shares.a).toBeCloseTo(183)
+    expect(shares.b).toBeCloseTo(193)
+  })
+
+  it('scales custom amounts in proportion when they do not add up', () => {
+    const shares = expenseShares({
+      id: 'e',
+      amount: 30,
+      currency: 'USD',
+      paidBy: 'a',
+      participantIds: ['a', 'b'],
+      splitMode: 'custom',
+      shares: { a: 10, b: 10 },
+      categoryId: 'food',
+      note: '',
+      date: '2026-09-01',
+      createdAt: 1,
+    })
+    expect(shares.a).toBeCloseTo(15)
+    expect(shares.b).toBeCloseTo(15)
+  })
+})
+
 describe('ratesForBase', () => {
   it('keeps the base currency at 1', () => {
     expect(ratesForBase('IDR').IDR).toBe(1)
@@ -41,5 +81,60 @@ describe('ratesForBase', () => {
     const idr = ratesForBase('IDR')
     const usd = ratesForBase('USD')
     expect(idr.USD * usd.IDR).toBeCloseTo(1, 6)
+  })
+})
+
+describe('trip spend vs settle-up payments', () => {
+  const eng = 'e'
+  const nat = 'n'
+
+  function cph(over: Partial<Trip> & Pick<Trip, 'expenses'>): Trip {
+    return {
+      id: 'cph',
+      name: 'Copenhagen',
+      emoji: '🌅',
+      startDate: '2026-09-15',
+      endDate: '2026-09-20',
+      baseCurrency: 'DKK',
+      categories: defaultCategories(),
+      rates: { DKK: 1 },
+      createdAt: 1,
+      updatedAt: 1,
+      people: [
+        { id: eng, name: 'engdjaja', color: '#fb7185' },
+        { id: nat, name: 'nathanaelsp', color: '#60a5fa' },
+      ],
+      ...over,
+    }
+  }
+
+  function bill(id: string, amount: number, paidBy: string, extra: Partial<Expense> = {}): Expense {
+    return {
+      id,
+      amount,
+      currency: 'DKK',
+      paidBy,
+      participantIds: [eng, nat],
+      splitMode: 'equal',
+      categoryId: 'food',
+      note: id,
+      date: '2026-09-18',
+      createdAt: 1,
+      ...extra,
+    }
+  }
+
+  it('does not add settle-up payments to Spent or the bill count', () => {
+    const trip = cph({
+      expenses: [
+        bill('steam', 244, eng),
+        bill('test', 1, eng),
+        bill('pay-443', 443, nat, { categoryId: 'settlement', note: 'Settle up', participantIds: [eng] }),
+        bill('pay-215', 215, nat, { categoryId: 'settlement', note: 'Settle up', participantIds: [eng] }),
+      ],
+    })
+    expect(trip.expenses).toHaveLength(4)
+    expect(tripBillCount(trip)).toBe(2)
+    expect(tripTotalBase(trip)).toBeCloseTo(245)
   })
 })

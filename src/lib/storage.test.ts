@@ -15,9 +15,9 @@ describe('normalizeLineItems', () => {
     ])
   })
 
-  it('caps at 20 items', () => {
-    const items = Array.from({ length: 22 }, (_, i) => ({ name: `Item ${i + 1}`, amount: 1 }))
-    expect(normalizeLineItems(items)).toHaveLength(20)
+  it('caps at 40 items', () => {
+    const items = Array.from({ length: 45 }, (_, i) => ({ name: `Item ${i + 1}`, amount: 1 }))
+    expect(normalizeLineItems(items)).toHaveLength(40)
   })
 })
 
@@ -49,5 +49,16 @@ describe('normalizeTrip line items', () => {
       { name: 'Nasi campur', amount: 45000 },
       { name: 'Es teh', amount: 8000 },
     ])
+  })
+
+  it('round-trips friend clocks and delete tombstones', () => {
+    const trip = normalizeTrip({
+      name: 'Test',
+      people: [{ id: 'p1', name: 'Maya', color: '#000', updatedAt: 40 }],
+      deletedPersonIds: ['p2'],
+      expenses: [],
+    })
+    expect(trip?.people[0]?.updatedAt).toBe(40)
+    expect(trip?.deletedPersonIds).toEqual(['p2'])
   })
 })

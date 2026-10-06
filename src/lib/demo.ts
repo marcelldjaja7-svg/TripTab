@@ -36,6 +36,7 @@ export function createDemoTrip(): Trip {
     id: uid(),
     name: 'Bali Escape',
     emoji: '🏝️',
+    destinationId: 'bali',
     startDate: '2026-09-12',
     endDate: '2026-09-20',
     baseCurrency: 'IDR',
@@ -152,7 +153,7 @@ export function createDemoTrip(): Trip {
   }
 }
 
-export function emptyTrip(name: string, emoji: string, baseCurrency: string): Trip {
+export function emptyTrip(name: string, emoji: string, baseCurrency: string, destinationId?: string): Trip {
   const now = Date.now()
   return {
     id: uid(),
@@ -161,6 +162,7 @@ export function emptyTrip(name: string, emoji: string, baseCurrency: string): Tr
     startDate: '',
     endDate: '',
     baseCurrency,
+    destinationId,
     people: [],
     categories: defaultCategories(),
     expenses: [],

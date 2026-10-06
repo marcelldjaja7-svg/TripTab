@@ -1,7 +1,7 @@
 import { Camera, ImageIcon, LoaderCircle, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { formatMoney } from '../lib/money'
-import { loadVisionKey, saveVisionKey, ScanError, scanReceiptPhoto, type ReceiptScan } from '../lib/receipt'
+import { loadVisionKey, resolveVisionKey, saveVisionKey, ScanError, scanReceiptPhoto, type ReceiptScan } from '../lib/receipt'
 import { cn } from '../lib/utils'
 import type { Trip } from '../types'
 import { Group, GroupRow, TextInput } from './ui'
@@ -35,7 +35,7 @@ export function BillScanPanel({
     setPreview(localUrl)
     setError('')
     setMessage('')
-    const key = loadVisionKey()
+    const key = resolveVisionKey()
     if (!key) {
       setHasKey(false)
       setError('Paste a free Gemini key below so AI can list the items. You can still type the amount.')
@@ -76,7 +76,7 @@ export function BillScanPanel({
           <div className="min-w-0 flex-1">
             <p className="text-[17px] font-medium">Scan bill</p>
             <p className="mt-0.5 text-[13px] text-[var(--muted)]">
-              Take a photo or pick from your library. AI reads the items and total — you check, then save.
+              Take a photo or pick from your library. Gemini reads the items and total — you check, then save.
             </p>
           </div>
         </GroupRow>
@@ -127,7 +127,7 @@ export function BillScanPanel({
             Take Photo
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,image/heic,image/heif,.heic,.heif"
               capture="environment"
               disabled={disabled || scanning}
               className="sr-only"
@@ -143,7 +143,7 @@ export function BillScanPanel({
             Library
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,image/heic,image/heif,.heic,.heif"
               disabled={disabled || scanning}
               className="sr-only"
               onChange={(e) => {
@@ -170,7 +170,7 @@ export function BillScanPanel({
             </span>
           )}
           <div className="min-w-0 flex-1">
-            <p className="text-[15px] font-medium">{scanning ? 'Scanning bill…' : 'Bill photo'}</p>
+            <p className="text-[15px] font-medium">{scanning ? 'Gemini is reading the bill…' : 'Bill photo'}</p>
             <p className="text-[13px] text-[var(--muted)]">
               {scanning ? 'Reading items, total, and shop name.' : 'Attached to this draft only.'}
             </p>
@@ -210,11 +210,13 @@ export function ScanLines({
   if (items.length === 0) return null
   return (
     <div>
-      <p className="mb-2 px-1 text-[13px] font-medium text-[var(--muted)]">Items on this bill</p>
-      <Group>
+      <p className="mb-2 px-1 text-[13px] font-medium text-[var(--muted)]">
+        Items on this bill · {items.length} {items.length === 1 ? 'line' : 'lines'}
+      </p>
+      <Group className="max-h-52 overflow-y-auto">
         {items.map((item, index) => (
           <GroupRow key={`${item.name}-${index}`}>
-            <span className="min-w-0 flex-1 truncate text-[17px]">{item.name}</span>
+            <span className="min-w-0 flex-1 break-words text-[17px]">{item.name}</span>
             <span className="shrink-0 text-[17px] font-semibold tabular-nums">
               {formatMoney(item.amount, currency)}
             </span>

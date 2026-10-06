@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { CURRENCIES } from '../lib/currencies'
 import {
   equalPercents,
   equalShares,
@@ -10,10 +9,12 @@ import {
   sharesMatchTotal,
   sharesSum,
 } from '../lib/money'
+import { parseExpenseDate } from '../lib/dates'
 import { noteFromScan, type ReceiptScan } from '../lib/receipt'
 import { cn, todayISO, uid } from '../lib/utils'
 import type { Expense, SplitMode, Trip } from '../types'
 import { BillScanPanel, ScanLines } from './BillScan'
+import { CurrencyPicker } from './CurrencyPicker'
 import { Avatar, Button, Group, GroupRow, Modal, Segmented, TextInput } from './ui'
 
 type Props = {
@@ -57,7 +58,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
     expense?.categoryId ?? trip.categories.find((c) => c.id !== 'settlement')?.id ?? trip.categories[0]?.id,
   )
   const [note, setNote] = useState(expense?.note ?? '')
-  const [date, setDate] = useState(expense?.date || todayISO())
+  const [date, setDate] = useState(parseExpenseDate(expense?.date) || expense?.date || todayISO())
   const [rateDraft, setRateDraft] = useState(() => {
     const r = trip.rates[expense?.currency ?? trip.baseCurrency]
     return r ? String(roundTo(r, 8)) : '1'
@@ -141,7 +142,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
     if (scan.note || scan.merchant || scan.lineItems?.length) {
       setNote(noteFromScan(scan.note || scan.merchant || '', scan.lineItems ?? []))
     }
-    if (scan.date) setDate(scan.date)
+    if (scan.date) setDate(parseExpenseDate(scan.date) || scan.date)
     if (scan.categoryId) setCategoryId(scan.categoryId)
     setScanLines(scan.lineItems ?? [])
     setError('')
@@ -183,7 +184,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
       shares: splitMode === 'custom' ? parsedAmounts : splitMode === 'percent' ? parsedPercents : undefined,
       categoryId,
       note: noteFromScan(note.trim(), scanLines),
-      date,
+      date: parseExpenseDate(date) || date,
       createdAt: expense?.createdAt ?? Date.now(),
       lineItems: scanLines.length ? scanLines : undefined,
     }
@@ -211,29 +212,22 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
             </GroupRow>
             <GroupRow>
               <span className="w-[5.75rem] shrink-0 text-[17px] text-[var(--muted)]">Currency</span>
-              <select
-                className="min-w-0 flex-1 appearance-none bg-transparent py-1 text-right text-[17px] outline-none"
+              <CurrencyPicker
+                showName={false}
                 value={currency}
-                onChange={(e) => {
-                  const code = e.target.value
+                onChange={(code) => {
                   setCurrency(code)
                   const existing = trip.rates[code]
                   setRateDraft(existing ? String(roundTo(existing, 8)) : '1')
                 }}
-              >
-                {CURRENCIES.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.code}
-                  </option>
-                ))}
-              </select>
+              />
             </GroupRow>
             <GroupRow>
               <span className="w-[5.75rem] shrink-0 text-[17px] text-[var(--muted)]">Date</span>
               <TextInput
                 className="rounded-none bg-transparent px-0 py-0 text-right dark:bg-transparent"
                 type="date"
-                value={date}
+                value={parseExpenseDate(date) || ''}
                 onChange={(e) => setDate(e.target.value)}
               />
             </GroupRow>

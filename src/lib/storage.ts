@@ -1,6 +1,7 @@
 import type { AppData, Category, Expense, Person, Trip } from '../types'
 import { CURRENCY_CODES, DEFAULT_BASE_CURRENCY, ratesForBase } from './currencies'
 import { PERSON_COLORS } from './colors'
+import { parseExpenseDate } from './dates'
 import { defaultCategories } from './demo'
 
 export const STORAGE_KEY = 'triptab.v1'
@@ -87,6 +88,7 @@ export function normalizeTrip(input: unknown): Trip | null {
     startDate: typeof raw.startDate === 'string' ? raw.startDate : '',
     endDate: typeof raw.endDate === 'string' ? raw.endDate : '',
     baseCurrency,
+    destinationId: typeof raw.destinationId === 'string' && raw.destinationId ? raw.destinationId : undefined,
     people,
     categories,
     expenses,
@@ -99,6 +101,11 @@ export function normalizeTrip(input: unknown): Trip | null {
     deletedExpenseIds: Array.isArray(raw.deletedExpenseIds)
       ? raw.deletedExpenseIds.filter((id): id is string => typeof id === 'string')
       : undefined,
+    deletedPersonIds: Array.isArray(raw.deletedPersonIds)
+      ? raw.deletedPersonIds.filter((id): id is string => typeof id === 'string')
+      : undefined,
+    updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : undefined,
+    updatedByName: typeof raw.updatedByName === 'string' && raw.updatedByName.trim() ? raw.updatedByName.trim() : undefined,
   }
 }
 
@@ -110,6 +117,7 @@ function normalizePerson(input: unknown): Person | null {
     id: raw.id,
     name: raw.name.trim() || 'Friend',
     color: typeof raw.color === 'string' ? raw.color : PERSON_COLORS[0],
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined,
   }
 }
 
@@ -168,7 +176,7 @@ function normalizeExpense(
     splitMode,
     categoryId,
     note: typeof raw.note === 'string' ? raw.note : '',
-    date: typeof raw.date === 'string' ? raw.date : '',
+    date: parseExpenseDate(raw.date) ?? '',
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined,
     ...(lineItems ? { lineItems } : {}),
@@ -187,6 +195,6 @@ export function normalizeLineItems(input: unknown): { name: string; amount: numb
       return { name: name.slice(0, 60), amount }
     })
     .filter((x): x is { name: string; amount: number } => Boolean(x))
-    .slice(0, 20)
+    .slice(0, 40)
   return items.length ? items : undefined
 }

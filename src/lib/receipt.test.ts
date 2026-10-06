@@ -7,6 +7,7 @@ import {
   normalizeReceiptScan,
   parseAmountValue,
   parseScanDate,
+  SCAN_MODELS,
 } from './receipt'
 import { defaultCategories } from './demo'
 
@@ -40,12 +41,10 @@ describe('inferCurrency', () => {
 })
 
 describe('parseScanDate', () => {
-  it('accepts ISO and day-first dates in range', () => {
-    const now = new Date()
-    const iso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    const dmy = `${String(now.getDate()).padStart(2, '0')}/${String(now.getMonth() + 1).padStart(2, '0')}/${now.getFullYear()}`
-    expect(parseScanDate(iso)).toBe(iso)
-    expect(parseScanDate(dmy)).toBe(iso)
+  it('accepts ISO and written 17 September receipt dates', () => {
+    expect(parseScanDate('17 September 2026')).toBe('2026-09-17')
+    expect(parseScanDate('17th Sep 2026')).toBe('2026-09-17')
+    expect(parseScanDate('17/09/2026')).toBe('2026-09-17')
   })
 
   it('drops nonsense dates', () => {
@@ -85,19 +84,19 @@ describe('normalizeReceiptScan', () => {
     expect(scan.lineItems?.[0]?.name).toBe('Nasi campur')
   })
 
-  it('keeps at most 20 line items', () => {
+  it('keeps a long receipt and caps only past 40 lines', () => {
     const scan = normalizeReceiptScan(
       {
         amount: 100,
         currency: 'IDR',
         merchant: 'Warung',
-        lineItems: Array.from({ length: 25 }, (_, i) => ({ name: `Item ${i + 1}`, amount: i + 1 })),
+        lineItems: Array.from({ length: 45 }, (_, i) => ({ name: `Item ${i + 1}`, amount: i + 1 })),
       },
       { baseCurrency: 'IDR', categories: cats },
     )
-    expect(scan.lineItems).toHaveLength(20)
+    expect(scan.lineItems).toHaveLength(40)
     expect(scan.lineItems?.[0]?.name).toBe('Item 1')
-    expect(scan.lineItems?.[19]?.name).toBe('Item 20')
+    expect(scan.lineItems?.[39]?.name).toBe('Item 40')
   })
 
   it('joins merchant and item names for the expense note', () => {
@@ -114,11 +113,33 @@ describe('normalizeReceiptScan', () => {
     expect(scan.currency).toBe('IDR')
     expect(scan.amount).toBe(20)
   })
+
+  it('keeps every line from a long receipt instead of capping at 8', () => {
+    const lineItems = Array.from({ length: 24 }, (_, i) => ({
+      name: `Item ${i + 1}`,
+      amount: (i + 1) * 1000,
+    }))
+    const scan = normalizeReceiptScan(
+      { amount: 300000, merchant: 'Supermarket', lineItems },
+      { baseCurrency: 'IDR', categories: cats },
+    )
+    expect(scan.lineItems).toHaveLength(24)
+    expect(scan.lineItems?.[0]?.name).toBe('Item 1')
+    expect(scan.lineItems?.[23]?.name).toBe('Item 24')
+  })
 })
 
 describe('extractJsonObject', () => {
   it('reads fenced json', () => {
     const json = extractJsonObject('```json\n{"amount": 9}\n```') as { amount: number }
     expect(json.amount).toBe(9)
+  })
+})
+
+describe('Gemini photo scan', () => {
+  it('uses current Flash models instead of shut-down 1.5 / 2.0 ids', () => {
+    expect(SCAN_MODELS[0]).toBe('gemini-flash-latest')
+    expect(SCAN_MODELS.some((model) => model.includes('1.5'))).toBe(false)
+    expect(SCAN_MODELS.some((model) => model.includes('2.0'))).toBe(false)
   })
 })

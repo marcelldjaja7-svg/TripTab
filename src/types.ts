@@ -6,6 +6,8 @@ export type Person = {
   id: string
   name: string
   color: string
+  /** When this friend was last renamed, recolored, or added. Used to merge live copies. */
+  updatedAt?: number
 }
 
 export type Category = {
@@ -39,6 +41,8 @@ export type Trip = {
   startDate: string
   endDate: string
   baseCurrency: string
+  /** Pinned photo backdrop. When omitted, the destination is inferred from name/emoji. */
+  destinationId?: string
   people: Person[]
   categories: Category[]
   expenses: Expense[]
@@ -51,6 +55,11 @@ export type Trip = {
   /** Public room id so friends can add expenses from another phone. */
   shareId?: string
   deletedExpenseIds?: string[]
+  /** Friends removed on any phone — merge uses this so they stay gone. */
+  deletedPersonIds?: string[]
+  /** Person id of whoever last saved this trip on any phone. */
+  updatedBy?: string
+  updatedByName?: string
 }
 
 export type AppData = {
@@ -68,7 +77,14 @@ export type Transfer = {
 
 export type PersonBalance = {
   personId: string
+  /** Cards they swiped for purchases (settle-up is not spend). */
   paid: number
+  /** Their portion of each bill — what they have to pay of the trip. */
   share: number
+  /** Settle-up transfers: positive = they paid a friend back. */
+  settled: number
+  /** paid + settled — what they have paid toward the trip after settle-up. */
+  funded: number
+  /** paid − share + settled. Positive = is owed. */
   net: number
 }
