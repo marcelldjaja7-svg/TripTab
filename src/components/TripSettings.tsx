@@ -55,15 +55,20 @@ export function TripSettings({
 
   const pullRates = async () => {
     setFetching(true)
-    const live = await fetchLiveRates(trip.baseCurrency)
+    const live = await fetchLiveRates(trip.baseCurrency, usedCurrencies)
     setFetching(false)
     if (!live) {
       onNotify('Live rates unavailable — edit manually')
       return
     }
+    const now = Date.now()
     onChange({
       ...trip,
       rates: { ...trip.rates, ...live, [trip.baseCurrency]: 1 },
+      rateTouchedAt: {
+        ...trip.rateTouchedAt,
+        ...Object.fromEntries(Object.keys(live).map((code) => [code, now])),
+      },
       ratesUpdatedAt: new Date().toISOString(),
     })
     onNotify('Rates updated from Frankfurter')
@@ -121,13 +126,27 @@ export function TripSettings({
           <span className="w-[5.5rem] shrink-0 text-[17px] text-[var(--muted)]">Currency</span>
           <CurrencyPicker
             value={trip.baseCurrency}
-            onChange={(base) =>
+            onChange={(base) => {
+              const factor = trip.rates[base]
+              const rates = convertRatesToNewBase(trip.rates, base)
+              const now = Date.now()
               onChange({
                 ...trip,
                 baseCurrency: base,
-                rates: convertRatesToNewBase(trip.rates, base),
+                baseUpdatedAt: now,
+                rates,
+                rateTouchedAt: Object.fromEntries(Object.keys(rates).map((code) => [code, now])),
+                expenses: trip.expenses.map((expense) => ({
+                  ...expense,
+                  fxRate:
+                    expense.currency === base
+                      ? 1
+                      : typeof expense.fxRate === 'number' && factor && factor > 0
+                        ? expense.fxRate / factor
+                        : expense.fxRate,
+                })),
               })
-            }
+            }}
           />
         </GroupRow>
         <GroupRow>
@@ -163,7 +182,9 @@ export function TripSettings({
               onChange={(e) =>
                 onChange({
                   ...trip,
-                  people: trip.people.map((x) => (x.id === p.id ? { ...x, name: e.target.value } : x)),
+                  people: trip.people.map((x) =>
+                    x.id === p.id ? { ...x, name: e.target.value, updatedAt: Date.now() } : x,
+                  ),
                 })
               }
             />
@@ -181,7 +202,9 @@ export function TripSettings({
                   onClick={() =>
                     onChange({
                       ...trip,
-                      people: trip.people.map((x) => (x.id === p.id ? { ...x, color: c } : x)),
+                      people: trip.people.map((x) =>
+                        x.id === p.id ? { ...x, color: c, updatedAt: Date.now() } : x,
+                      ),
                     })
                   }
                 />
@@ -196,7 +219,11 @@ export function TripSettings({
                   onNotify('This friend is on an expense — remove those first')
                   return
                 }
-                onChange({ ...trip, people: trip.people.filter((x) => x.id !== p.id) })
+                onChange({
+                  ...trip,
+                  people: trip.people.filter((x) => x.id !== p.id),
+                  deletedPersonIds: [...new Set([...(trip.deletedPersonIds ?? []), p.id])],
+                })
               }}
             >
               <Trash2 size={16} strokeWidth={1.75} />
@@ -214,7 +241,10 @@ export function TripSettings({
                 const color = PERSON_COLORS[trip.people.length % PERSON_COLORS.length]
                 onChange({
                   ...trip,
-                  people: [...trip.people, { id: uid(), name: newFriend.trim(), color }],
+                  people: [
+                    ...trip.people,
+                    { id: uid(), name: newFriend.trim(), color, updatedAt: Date.now() },
+                  ],
                 })
                 setNewFriend('')
               }
@@ -228,7 +258,10 @@ export function TripSettings({
               const color = PERSON_COLORS[trip.people.length % PERSON_COLORS.length]
               onChange({
                 ...trip,
-                people: [...trip.people, { id: uid(), name: newFriend.trim(), color }],
+                people: [
+                  ...trip.people,
+                  { id: uid(), name: newFriend.trim(), color, updatedAt: Date.now() },
+                ],
               })
               setNewFriend('')
             }}
@@ -248,6 +281,7 @@ export function TripSettings({
               onChange={(e) =>
                 onChange({
                   ...trip,
+                  categoriesUpdatedAt: Date.now(),
                   categories: trip.categories.map((x) => (x.id === c.id ? { ...x, emoji: e.target.value } : x)),
                 })
               }
@@ -258,6 +292,7 @@ export function TripSettings({
               onChange={(e) =>
                 onChange({
                   ...trip,
+                  categoriesUpdatedAt: Date.now(),
                   categories: trip.categories.map((x) => (x.id === c.id ? { ...x, name: e.target.value } : x)),
                 })
               }
@@ -272,7 +307,11 @@ export function TripSettings({
                     onNotify('Move expenses off this category first')
                     return
                   }
-                  onChange({ ...trip, categories: trip.categories.filter((x) => x.id !== c.id) })
+                  onChange({
+                    ...trip,
+                    categoriesUpdatedAt: Date.now(),
+                    categories: trip.categories.filter((x) => x.id !== c.id),
+                  })
                 }}
               >
                 <Trash2 size={16} strokeWidth={1.75} />
@@ -294,6 +333,7 @@ export function TripSettings({
               if (!newCat.trim()) return
               onChange({
                 ...trip,
+                categoriesUpdatedAt: Date.now(),
                 categories: [...trip.categories, { id: uid(), name: newCat.trim(), emoji: '✨' }],
               })
               setNewCat('')
@@ -306,7 +346,7 @@ export function TripSettings({
 
       <SectionLabel>Conversion rates</SectionLabel>
       <p className="mb-2 px-4 text-[13px] text-[var(--muted)]">
-        1 unit of each currency in {trip.baseCurrency}. Manual is enough; live fetch is optional.
+        1 unit of each currency in {trip.baseCurrency}. Set JPY by hand, or fetch (JPY→{trip.baseCurrency} from Frankfurter).
         {trip.ratesUpdatedAt ? ` Last fetch ${new Date(trip.ratesUpdatedAt).toLocaleString()}.` : ''}
       </p>
       <Group>
@@ -317,21 +357,25 @@ export function TripSettings({
         {usedCurrencies
           .filter((code, i, arr) => arr.indexOf(code) === i && code !== trip.baseCurrency)
           .map((code) => {
-            const rate = trip.rates[code] ?? 1
+            const rate = trip.rates[code]
+            const known = typeof rate === 'number' && rate > 0
             return (
               <GroupRow key={code} className="py-3">
                 <span className="w-14 font-semibold">{code}</span>
                 <RateInput
-                  value={rate}
+                  value={known ? rate : undefined}
                   onCommit={(n) =>
                     onChange({
                       ...trip,
                       rates: { ...trip.rates, [code]: n },
+                      rateTouchedAt: { ...trip.rateTouchedAt, [code]: Date.now() },
                     })
                   }
                 />
                 <span className="w-[7.5rem] text-right text-[12px] text-[var(--muted)]">
-                  1 {trip.baseCurrency} ≈ {roundTo(inverseRate(rate), rate < 0.01 ? 0 : 2)} {code}
+                  {known
+                    ? `1 ${trip.baseCurrency} ≈ ${roundTo(inverseRate(rate), rate < 0.01 ? 0 : 2)} ${code}`
+                    : 'Set a rate'}
                 </span>
               </GroupRow>
             )
@@ -521,20 +565,28 @@ export function TripSettings({
   )
 }
 
-function RateInput({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
-  const [draft, setDraft] = useState(String(value))
+function RateInput({ value, onCommit }: { value?: number; onCommit: (n: number) => void }) {
+  const shown = typeof value === 'number' && value > 0 ? String(value) : ''
+  const [draft, setDraft] = useState(shown)
   useEffect(() => {
-    setDraft(String(value))
-  }, [value])
+    setDraft(shown)
+  }, [shown])
   return (
     <TextInput
       inputMode="decimal"
       className="flex-1 rounded-xl bg-[var(--fill)] px-3 py-2 text-right dark:bg-black/25"
       value={draft}
-      onChange={(e) => {
-        setDraft(e.target.value)
-        const n = Number(e.target.value)
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        const n = Number(draft)
         if (Number.isFinite(n) && n > 0) onCommit(n)
+        else setDraft(shown)
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          const n = Number(draft)
+          if (Number.isFinite(n) && n > 0) onCommit(n)
+        }
       }}
     />
   )

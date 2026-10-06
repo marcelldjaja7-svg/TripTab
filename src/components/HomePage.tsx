@@ -53,7 +53,7 @@ export function HomePage() {
 
       <h1 className="large-title mt-2">Trips</h1>
       <p className="mt-1 max-w-md text-[15px] text-[var(--muted)]">
-        Split expenses with friends. Settle in IDR or any currency. Invite them with a live link so everyone can add bills from their own phone.
+        Split expenses with friends. Invite them with a live link so they can add bills from their phone. Scan a receipt photo to list the items.
       </p>
 
       <div className="mt-5 flex gap-2">
@@ -88,6 +88,7 @@ export function HomePage() {
                     <AvatarStack people={trip.people} />
                     <span className="truncate">
                       {trip.baseCurrency}
+                      {trip.shareId ? ' · Live' : ''}
                       {trip.isDemo ? ' · Demo' : ''}
                     </span>
                   </span>

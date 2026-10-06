@@ -93,6 +93,16 @@ export function normalizeTrip(input: unknown): Trip | null {
     categories,
     expenses,
     rates,
+    rateTouchedAt:
+      raw.rateTouchedAt && typeof raw.rateTouchedAt === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.rateTouchedAt as Record<string, unknown>).filter(
+              (entry): entry is [string, number] => typeof entry[1] === 'number',
+            ),
+          )
+        : undefined,
+    baseUpdatedAt: typeof raw.baseUpdatedAt === 'number' ? raw.baseUpdatedAt : undefined,
+    categoriesUpdatedAt: typeof raw.categoriesUpdatedAt === 'number' ? raw.categoriesUpdatedAt : undefined,
     ratesUpdatedAt: typeof raw.ratesUpdatedAt === 'string' ? raw.ratesUpdatedAt : undefined,
     isDemo: Boolean(raw.isDemo),
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -100,6 +110,9 @@ export function normalizeTrip(input: unknown): Trip | null {
     shareId: typeof raw.shareId === 'string' ? raw.shareId : undefined,
     deletedExpenseIds: Array.isArray(raw.deletedExpenseIds)
       ? raw.deletedExpenseIds.filter((id): id is string => typeof id === 'string')
+      : undefined,
+    deletedPersonIds: Array.isArray(raw.deletedPersonIds)
+      ? raw.deletedPersonIds.filter((id): id is string => typeof id === 'string')
       : undefined,
     updatedBy: typeof raw.updatedBy === 'string' ? raw.updatedBy : undefined,
     updatedByName: typeof raw.updatedByName === 'string' && raw.updatedByName.trim() ? raw.updatedByName.trim() : undefined,
@@ -114,6 +127,7 @@ function normalizePerson(input: unknown): Person | null {
     id: raw.id,
     name: raw.name.trim() || 'Friend',
     color: typeof raw.color === 'string' ? raw.color : PERSON_COLORS[0],
+    updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined,
   }
 }
 
@@ -137,13 +151,11 @@ function normalizeExpense(
   const raw = input as Record<string, unknown>
   const amount = typeof raw.amount === 'number' ? raw.amount : Number(raw.amount)
   if (!Number.isFinite(amount) || amount < 0) return null
-  const peopleIds = new Set(people.map((p) => p.id))
-  const paidBy = typeof raw.paidBy === 'string' && peopleIds.has(raw.paidBy) ? raw.paidBy : people[0]?.id
+  const paidBy = typeof raw.paidBy === 'string' && raw.paidBy ? raw.paidBy : undefined
   if (!paidBy) return null
   const participantIds = Array.isArray(raw.participantIds)
-    ? raw.participantIds.filter((id): id is string => typeof id === 'string' && peopleIds.has(id))
+    ? raw.participantIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
     : people.map((p) => p.id)
-  if (participantIds.length === 0) return null
   const currency =
     typeof raw.currency === 'string' && raw.currency.length === 3
       ? raw.currency.toUpperCase()
@@ -161,6 +173,7 @@ function normalizeExpense(
         )
       : undefined
   const splitMode = raw.splitMode === 'custom' || raw.splitMode === 'percent' ? raw.splitMode : 'equal'
+  const lineItems = normalizeLineItems(raw.lineItems)
   return {
     id: typeof raw.id === 'string' ? raw.id : crypto.randomUUID(),
     amount,
@@ -174,5 +187,24 @@ function normalizeExpense(
     date: parseExpenseDate(raw.date) ?? '',
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined,
+    rev: typeof raw.rev === 'number' ? raw.rev : undefined,
+    fxRate: typeof raw.fxRate === 'number' && raw.fxRate > 0 ? raw.fxRate : undefined,
+    ...(lineItems ? { lineItems } : {}),
   }
+}
+
+export function normalizeLineItems(input: unknown): { name: string; amount: number }[] | undefined {
+  if (!Array.isArray(input)) return undefined
+  const items = input
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const row = item as Record<string, unknown>
+      const name = typeof row.name === 'string' ? row.name.trim() : ''
+      const amount = typeof row.amount === 'number' ? row.amount : Number(row.amount)
+      if (!name || !Number.isFinite(amount) || amount < 0) return null
+      return { name: name.slice(0, 60), amount }
+    })
+    .filter((x): x is { name: string; amount: number } => Boolean(x))
+    .slice(0, 40)
+  return items.length ? items : undefined
 }

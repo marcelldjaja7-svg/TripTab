@@ -170,6 +170,79 @@ describe('live channel', () => {
     expect(trip?.updatedAt).toBe(43)
   })
 
+  it('keeps a friend added on a header-only ping when the snapshot has the bills', async () => {
+    const header = {
+      ...sample,
+      expenses: [],
+      people: [
+        { id: 'a', name: 'A', color: '#000' },
+        { id: 'c', name: 'C', color: '#222', updatedAt: 90 },
+      ],
+      updatedAt: 90,
+      updatedByName: 'New friend',
+    }
+    const full = withBills(12, 10)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-people-12')) {
+          return new Response(JSON.stringify(full), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 90,
+      by: 'friend',
+      who: 'New friend',
+      p: encodeTripShare(header),
+      bin: 'bin-people-12',
+    })
+    const trip = await tripFromPing(ping!, 'tt-people-bin')
+    expect(trip?.expenses).toHaveLength(12)
+    expect(trip?.people.map((p) => p.id).sort()).toEqual(['a', 'c'])
+  })
+
+  it('applies bill deletes from an empty payload onto the snapshot', async () => {
+    const gone = withBills(3, 10)
+    const payload = {
+      ...gone,
+      expenses: [],
+      deletedExpenseIds: gone.expenses.map((e) => e.id),
+      updatedAt: 80,
+      updatedByName: 'Cleared',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('lucko.me/bin-delete-3')) {
+          return new Response(JSON.stringify(gone), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('no', { status: 404 })
+      }),
+    )
+    const ping = parseLivePing({
+      v: 1,
+      fp: 'x',
+      at: 80,
+      by: 'friend',
+      who: 'Cleared',
+      p: encodeTripShare(payload),
+      bin: 'bin-delete-3',
+    })
+    const trip = await tripFromPing(ping!, 'tt-delete-bin')
+    expect(trip?.expenses).toHaveLength(0)
+    expect(trip?.deletedExpenseIds).toEqual(gone.expenses.map((e) => e.id))
+  })
+
   it('drops unused conversion rates so pings fit in the live channel', () => {
     const fat: Trip = {
       ...sample,

@@ -6,6 +6,8 @@ export type Person = {
   id: string
   name: string
   color: string
+  /** When this friend was last renamed, recolored, or added. Used to merge live copies. */
+  updatedAt?: number
 }
 
 export type Category = {
@@ -28,6 +30,12 @@ export type Expense = {
   date: string
   createdAt: number
   updatedAt?: number
+  /** Monotonic save count for this bill. Merge prefers the higher rev over wall clocks. */
+  rev?: number
+  /** Units of the trip base per 1 of this currency, locked when the bill was saved. */
+  fxRate?: number
+  /** Items identified from a receipt photo. Optional; never required to split. */
+  lineItems?: { name: string; amount: number }[]
 }
 
 export type Trip = {
@@ -44,6 +52,12 @@ export type Trip = {
   expenses: Expense[]
   /** Units of base currency per 1 unit of this currency. */
   rates: Record<string, number>
+  /** When each rate key was last edited, so USD and EUR changes merge independently. */
+  rateTouchedAt?: Record<string, number>
+  /** When the settle currency was last switched — not the newest bill. */
+  baseUpdatedAt?: number
+  /** When a category was last renamed or added. */
+  categoriesUpdatedAt?: number
   ratesUpdatedAt?: string
   isDemo?: boolean
   createdAt: number
@@ -51,6 +65,8 @@ export type Trip = {
   /** Public room id so friends can add expenses from another phone. */
   shareId?: string
   deletedExpenseIds?: string[]
+  /** Friends removed on any phone — merge uses this so they stay gone. */
+  deletedPersonIds?: string[]
   /** Person id of whoever last saved this trip on any phone. */
   updatedBy?: string
   updatedByName?: string

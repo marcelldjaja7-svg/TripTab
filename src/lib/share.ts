@@ -1,5 +1,5 @@
 import type { PersonBalance, Transfer, Trip } from '../types'
-import { formatMoney } from './money'
+import { expenseRate, formatMoney } from './money'
 import { computeBalances, suggestedTransfers } from './settle'
 import { normalizeTrip } from './storage'
 
@@ -39,10 +39,11 @@ export function tripSummaryText(trip: Trip): string {
     const payer = people.get(e.paidBy) ?? 'Friend'
     const cat = cats.get(e.categoryId)
     const label = e.note.trim() || cat?.name || 'Expense'
+    const rate = expenseRate(e, trip)
     const converted =
-      e.currency === trip.baseCurrency
+      e.currency === trip.baseCurrency || rate == null
         ? ''
-        : ` → ${formatMoney(e.amount * (trip.rates[e.currency] ?? 1), trip.baseCurrency)}`
+        : ` → ${formatMoney(e.amount * rate, trip.baseCurrency)}`
     lines.push(
       `• ${e.date || 'undated'}  ${label}  ${formatMoney(e.amount, e.currency)}${converted}  (paid by ${payer})`,
     )
@@ -76,6 +77,7 @@ export function compactTripHeader(trip: Trip): Trip {
     ...trip,
     expenses: [],
     deletedExpenseIds: [],
+    deletedPersonIds: trip.deletedPersonIds ?? [],
     isDemo: false,
   })
 }

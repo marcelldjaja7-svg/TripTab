@@ -162,11 +162,11 @@ export function convertRatesToNewBase(
 ): Record<string, number> {
   const factor = rates[newBase]
   if (!factor || factor <= 0) {
-    return { ...ratesForBase(newBase), ...rates, [newBase]: 1 }
+    return { ...ratesForBase(newBase), [newBase]: 1 }
   }
   const next: Record<string, number> = {}
   for (const [code, value] of Object.entries(rates)) {
-    next[code] = value / factor
+    if (typeof value === 'number' && value > 0) next[code] = value / factor
   }
   next[newBase] = 1
   return roundRates(next)
@@ -181,24 +181,51 @@ function roundRates(rates: Record<string, number>): Record<string, number> {
   return next
 }
 
-export async function fetchLiveRates(base: string): Promise<Record<string, number> | null> {
-  try {
-    const url = `https://api.frankfurter.app/latest?from=${encodeURIComponent(base)}`
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 8000)
-    const res = await fetch(url, { signal: controller.signal })
-    clearTimeout(timer)
-    if (!res.ok) return null
-    const data = (await res.json()) as { rates?: Record<string, number> }
-    if (!data.rates) return null
-    const rates: Record<string, number> = { [base]: 1 }
-    for (const [code, value] of Object.entries(data.rates)) {
-      if (typeof value === 'number' && value > 0) {
-        rates[code] = Number((1 / value).toPrecision(8))
-      }
+export const FRANKFURTER_LATEST = 'https://api.frankfurter.dev/v1/latest'
+
+/**
+ * Frankfurter quotes `rates[code]` as units of `code` per 1 `from` (1 IDR = 0.00883 JPY).
+ * The trip stores units of base per 1 foreign (1 JPY = 113 IDR), so invert.
+ */
+export function tripRatesFromFrankfurterQuotes(
+  base: string,
+  quotesPerBase: Record<string, number>,
+): Record<string, number> {
+  const rates: Record<string, number> = { [base]: 1 }
+  for (const [code, value] of Object.entries(quotesPerBase)) {
+    if (code === base) continue
+    if (typeof value === 'number' && value > 0) {
+      rates[code] = Number((1 / value).toPrecision(8))
     }
-    return rates
+  }
+  return rates
+}
+
+async function frankfurterLatest(query: string): Promise<{ rates?: Record<string, number> } | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+  try {
+    const res = await fetch(`${FRANKFURTER_LATEST}?${query}`, { signal: controller.signal })
+    if (!res.ok) return null
+    return (await res.json()) as { rates?: Record<string, number> }
   } catch {
     return null
+  } finally {
+    clearTimeout(timer)
   }
+}
+
+export async function fetchLiveRates(base: string, wanted: string[] = []): Promise<Record<string, number> | null> {
+  const bulk = await frankfurterLatest(`from=${encodeURIComponent(base)}`)
+  if (!bulk?.rates) return null
+  const rates = tripRatesFromFrankfurterQuotes(base, bulk.rates)
+  const extras = [...new Set(wanted.filter((code) => code && code !== base))]
+  await Promise.all(
+    extras.map(async (code) => {
+      const pair = await frankfurterLatest(`from=${encodeURIComponent(code)}&to=${encodeURIComponent(base)}`)
+      const n = pair?.rates?.[base]
+      if (typeof n === 'number' && n > 0) rates[code] = Number(n.toPrecision(8))
+    }),
+  )
+  return rates
 }

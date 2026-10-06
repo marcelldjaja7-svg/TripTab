@@ -7,7 +7,13 @@ export function roundTo(amount: number, decimals: number): number {
 }
 
 export function toMinor(amount: number, decimals: number): number {
-  return Math.round(amount * 10 ** decimals)
+  const f = 10 ** decimals
+  return Math.round(Number((amount * f).toFixed(8)))
+}
+
+export function snapAmount(amount: number, currency: string): number {
+  const decimals = currencyDecimals(currency)
+  return fromMinor(toMinor(amount, decimals), decimals)
 }
 
 export function fromMinor(minor: number, decimals: number): number {
@@ -47,20 +53,34 @@ export function formatCompact(amount: number, currency: string): string {
   }
 }
 
-export function rateToBase(trip: Trip, currency: string): number {
+export function rateToBase(trip: Pick<Trip, 'baseCurrency' | 'rates'>, currency: string): number | null {
   if (currency === trip.baseCurrency) return 1
   const rate = trip.rates[currency]
   if (typeof rate === 'number' && rate > 0) return rate
-  return 1
+  return null
+}
+
+/** Locked bill rate, then the trip table. Missing or non-positive is not 1:1. */
+export function expenseRate(
+  expense: Pick<Expense, 'currency' | 'fxRate'>,
+  trip: Pick<Trip, 'baseCurrency' | 'rates'>,
+): number | null {
+  if (expense.currency === trip.baseCurrency) return 1
+  if (typeof expense.fxRate === 'number' && expense.fxRate > 0) return expense.fxRate
+  return rateToBase(trip, expense.currency)
 }
 
 export function toBase(amount: number, currency: string, trip: Trip): number {
-  return amount * rateToBase(trip, currency)
+  const rate = rateToBase(trip, currency)
+  if (rate == null) return Number.NaN
+  return amount * rate
 }
 
-export function toBaseMinor(amount: number, currency: string, trip: Trip): number {
+export function toBaseMinor(amount: number, currency: string, trip: Trip, expense?: Pick<Expense, 'currency' | 'fxRate'>): number {
   const decimals = currencyDecimals(trip.baseCurrency)
-  return toMinor(toBase(amount, currency, trip), decimals)
+  const rate = expense ? expenseRate(expense, trip) : rateToBase(trip, currency)
+  if (rate == null) return Number.NaN
+  return toMinor(amount * rate, decimals)
 }
 
 export function inverseRate(rate: number): number {
@@ -89,17 +109,18 @@ export function allocateProportional(
     for (const id of ids) out.set(id, 0)
     return out
   }
-  const rows = ids.map((id, index) => ({
+  const ordered = [...ids].sort((a, b) => a.localeCompare(b))
+  const rows = ordered.map((id, index) => ({
     id,
     index,
     w: Math.max(0, weights[id] ?? 0),
   }))
   const weightSum = rows.reduce((sum, row) => sum + row.w, 0)
   if (weightSum <= 0) {
-    const n = ids.length
+    const n = ordered.length
     const base = Math.floor(totalMinor / n)
     let rem = totalMinor - base * n
-    ids.forEach((id, i) => out.set(id, base + (i < rem ? 1 : 0)))
+    ordered.forEach((id, i) => out.set(id, base + (i < rem ? 1 : 0)))
     return out
   }
   const parts = rows.map((row) => {
@@ -231,14 +252,39 @@ export function tripTotalBase(trip: Trip, expenses: Expense[] = trip.expenses): 
   const decimals = currencyDecimals(trip.baseCurrency)
   let minor = 0
   for (const expense of tripBillExpenses(trip, expenses)) {
-    minor += toBaseMinor(expense.amount, expense.currency, trip)
+    const part = toBaseMinor(expense.amount, expense.currency, trip, expense)
+    if (Number.isFinite(part)) minor += part
   }
   return fromMinor(minor, decimals)
 }
 
 export function convertedLabel(trip: Trip, amount: number, currency: string): string {
+  const converted = toBase(amount, currency, trip)
+  if (!Number.isFinite(converted)) return `Need ${currency} rate`
   const decimals = currencyDecimals(trip.baseCurrency)
-  return formatMoney(roundTo(toBase(amount, currency, trip), decimals), trip.baseCurrency)
+  return formatMoney(roundTo(converted, decimals), trip.baseCurrency)
+}
+
+export function hasNegativeShares(expense: Expense): boolean {
+  if (!expense.shares || (expense.splitMode !== 'custom' && expense.splitMode !== 'percent')) return false
+  return participantIdsOf(expense).some((id) => (expense.shares?.[id] ?? 0) < 0)
+}
+
+export function hasAllZeroShares(expense: Expense): boolean {
+  if (expense.splitMode !== 'custom' && expense.splitMode !== 'percent') return false
+  if (!expense.shares) return false
+  const ids = participantIdsOf(expense)
+  if (ids.length === 0) return true
+  return ids.every((id) => (expense.shares?.[id] ?? 0) <= 0)
+}
+
+export function equalShareCaption(amount: number, participantIds: string[], currency: string): string {
+  const shares = equalShares(amount, participantIds, currency)
+  const values = participantIds.map((id) => shares[id] ?? 0)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (min === max) return `${formatMoney(min, currency)} each`
+  return `${formatMoney(max, currency)} or ${formatMoney(min, currency)}`
 }
 
 export function splitLabel(mode: SplitMode, included: number, totalPeople: number): string {

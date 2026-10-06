@@ -241,6 +241,7 @@ export function normalizeReceiptScan(
           return { name: name.slice(0, 120), amount: lineAmount }
         })
         .filter((x): x is ReceiptLine => Boolean(x))
+        .slice(0, 40)
     : undefined
   const scan: ReceiptScan = {}
   if (amount !== undefined) scan.amount = amount
@@ -251,6 +252,15 @@ export function normalizeReceiptScan(
   if (categoryId) scan.categoryId = categoryId
   if (lineItems && lineItems.length) scan.lineItems = lineItems
   return scan
+}
+
+export function noteFromScan(merchantOrNote: string, items: ReceiptLine[]): string {
+  const head = merchantOrNote.trim()
+  if (!items.length) return head
+  const names = items.map((item) => item.name).filter(Boolean)
+  if (!names.length) return head
+  if (head && names.some((name) => head.toLowerCase().includes(name.toLowerCase()))) return head
+  return [head, names.join(', ')].filter(Boolean).join(' · ').slice(0, 120)
 }
 
 export function extractJsonObject(text: string): unknown {
@@ -289,7 +299,7 @@ Rules:
 - date is the receipt date if clearly visible, else null.
 - category must be one of: ${cats}
 - note should be a short human label (merchant or what was bought).
-- lineItems: every distinct product/service line on the bill, in order. Do not cap or skip lines because there are many. Skip only blank or unreadable rows. Tax/service/total rows can be omitted if a grand total is already in amount.
+- lineItems: every distinct product/service line on the bill, in order. Include as many as are readable (up to 40). Skip only blank or unreadable rows. Tax/service/total rows can be omitted if a grand total is already in amount. Always fill lineItems when any items are readable.
 If this is not a receipt, still guess amount if any total is visible; otherwise nulls.`
 }
 

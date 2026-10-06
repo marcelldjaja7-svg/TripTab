@@ -253,7 +253,8 @@ function withLiveMeta(trip: Trip, shareId: string, ping: LivePing): Trip {
     ...trip,
     shareId,
     isDemo: false,
-    updatedAt: logAt || trip.updatedAt,
+    // Keep rate / base / category clocks. A newer bill must not squash a rate-only edit.
+    updatedAt: Math.max(logAt, trip.updatedAt),
     updatedByName: trip.updatedByName || ping.who,
   }
 }
@@ -261,11 +262,10 @@ function withLiveMeta(trip: Trip, shareId: string, ping: LivePing): Trip {
 export async function tripFromPing(ping: LivePing, shareId: string): Promise<Trip | null> {
   const fromPayload = ping.p ? decodeTripShare(ping.p) : null
   const fromBin = ping.bin ? await readLiveSnapshot(ping.bin) : null
-  // A header-only payload has no bills — never let its republish clock replace the snapshot.
+  // Always union payload + snapshot. A header-only ping has no bills, but it may
+  // carry people, tombstones, or item edits — mergeTrips keeps the fuller bill list.
   if (fromPayload && fromBin) {
-    const trip =
-      fromPayload.expenses.length === 0 ? fromBin : mergeTrips(fromPayload, fromBin)
-    return withLiveMeta(trip, shareId, ping)
+    return withLiveMeta(mergeTrips(fromPayload, fromBin), shareId, ping)
   }
   const trip = fromPayload ?? fromBin
   if (!trip) return null
@@ -300,6 +300,7 @@ function packLiveChunk(header: Trip, trip: Trip, expenses: Trip['expenses']): Tr
     ...header,
     expenses,
     deletedExpenseIds: trip.deletedExpenseIds ?? [],
+    deletedPersonIds: trip.deletedPersonIds ?? [],
     updatedAt: trip.updatedAt,
     updatedBy: trip.updatedBy,
     updatedByName: trip.updatedByName,
@@ -655,7 +656,7 @@ export async function waitForLiveTrip(shareId: string, ms = 8000): Promise<Trip 
       if (best && liveContentKey(next) === liveContentKey(best)) {
         stable += 1
         best = next
-        if (stable >= 1 && best.expenses.length > 0 && complete) return best
+        if (stable >= 1 && complete) return best
       } else {
         stable = 0
         best = next

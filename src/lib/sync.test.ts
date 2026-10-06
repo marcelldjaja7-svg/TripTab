@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Expense, Trip } from '../types'
 import { defaultCategories } from './demo'
 import { encodeTripShare } from './share'
+import { liveContentKey } from './merge'
 import { adoptSharedTrip, mergeTrips, pullLiveTrip, shouldPublishLive } from './sync'
 
 function trip(over: Partial<Trip> & Pick<Trip, 'people' | 'expenses'>): Trip {
@@ -168,6 +169,137 @@ describe('mergeTrips', () => {
       true,
     )
     expect(shouldPublishLive(trip({ people: [{ id: a, name: 'A', color: '#000' }], expenses: [] }), null)).toBe(false)
+  })
+
+  it('keeps a rename when the other phone only logged a newer bill', () => {
+    const a = 'a'
+    const local = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'Alex', color: '#000', updatedAt: 30 }],
+      expenses: [expense({ id: 'e1', paidBy: a, createdAt: 10 })],
+    })
+    const remote = trip({
+      updatedAt: 80,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({ id: 'e1', paidBy: a, createdAt: 10 }),
+        expense({ id: 'e2', paidBy: a, createdAt: 80, note: 'Newer bill' }),
+      ],
+    })
+    const merged = mergeTrips(local, remote)
+    expect(merged.people.find((p) => p.id === a)?.name).toBe('Alex')
+    expect(merged.expenses.map((e) => e.id).sort()).toEqual(['e1', 'e2'])
+  })
+
+  it('does not resurrect a deleted friend', () => {
+    const local = trip({
+      updatedAt: 20,
+      deletedPersonIds: ['c'],
+      people: [{ id: 'a', name: 'A', color: '#000' }],
+      expenses: [],
+    })
+    const remote = trip({
+      updatedAt: 10,
+      people: [
+        { id: 'a', name: 'A', color: '#000' },
+        { id: 'c', name: 'C', color: '#222' },
+      ],
+      expenses: [],
+    })
+    expect(mergeTrips(local, remote).people.map((p) => p.id)).toEqual(['a'])
+    expect(mergeTrips(local, remote).deletedPersonIds).toContain('c')
+  })
+
+  it('keeps scanned line items when the other phone has a newer unrelated bill', () => {
+    const a = 'a'
+    const local = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({
+          id: 'scan-1',
+          paidBy: a,
+          amount: 88,
+          updatedAt: 10,
+          lineItems: [
+            { name: 'Nasi', amount: 50 },
+            { name: 'Es teh', amount: 38 },
+          ],
+        }),
+      ],
+    })
+    const remote = trip({
+      updatedAt: 50,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'coffee', paidBy: a, amount: 4, updatedAt: 50 })],
+    })
+    const merged = mergeTrips(local, remote)
+    const scan = merged.expenses.find((e) => e.id === 'scan-1')
+    expect(scan?.lineItems).toEqual([
+      { name: 'Nasi', amount: 50 },
+      { name: 'Es teh', amount: 38 },
+    ])
+    expect(merged.expenses.map((e) => e.id).sort()).toEqual(['coffee', 'scan-1'])
+  })
+
+  it('republishes when only line items or a friend change', () => {
+    const a = 'a'
+    const base = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a, amount: 20, updatedAt: 10 })],
+    })
+    const items = {
+      ...base,
+      expenses: [
+        {
+          ...base.expenses[0],
+          updatedAt: 20,
+          lineItems: [{ name: 'Nasi', amount: 20 }],
+        },
+      ],
+    }
+    const renamed = {
+      ...base,
+      people: [{ id: a, name: 'Alex', color: '#000', updatedAt: 40 }],
+    }
+    expect(liveContentKey(base)).not.toBe(liveContentKey(items))
+    expect(liveContentKey(base)).not.toBe(liveContentKey(renamed))
+    expect(shouldPublishLive(items, base)).toBe(true)
+    expect(shouldPublishLive(renamed, base)).toBe(true)
+  })
+
+  it('keeps scanned items when a later edit of the same bill omitted them', () => {
+    const a = 'a'
+    const scanned = trip({
+      updatedAt: 10,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [
+        expense({
+          id: 'e1',
+          paidBy: a,
+          amount: 88,
+          updatedAt: 10,
+          lineItems: [
+            { name: 'Nasi', amount: 50 },
+            { name: 'Es teh', amount: 38 },
+          ],
+        }),
+      ],
+    })
+    const edited = trip({
+      updatedAt: 40,
+      people: [{ id: a, name: 'A', color: '#000' }],
+      expenses: [expense({ id: 'e1', paidBy: a, amount: 90, note: 'Warung', updatedAt: 40 })],
+    })
+    const merged = mergeTrips(scanned, edited)
+    const bill = merged.expenses.find((e) => e.id === 'e1')
+    expect(bill?.amount).toBe(90)
+    expect(bill?.note).toBe('Warung')
+    expect(bill?.lineItems).toEqual([
+      { name: 'Nasi', amount: 50 },
+      { name: 'Es teh', amount: 38 },
+    ])
   })
 })
 

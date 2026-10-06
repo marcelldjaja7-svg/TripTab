@@ -12,10 +12,12 @@ import {
 } from './lib/live'
 import {
   adoptSharedTrip,
+  applyTripSave,
   clearLiveShareLocation,
   mintLiveShareId,
   mergeTrips,
   pullLiveTrip,
+  pullMergePush,
   pushLiveTrip,
   setLiveShareHash,
   shouldPublishLive,
@@ -161,23 +163,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
-          // After the first pull, push this phone's new bills immediately so entries record live.
-          if (!firstForRoom && local.expenses.length > 0) {
-            await pushLiveTrip(shareId, local)
-            setLiveShareHash(shareId)
-          }
-          const remote = await pullLatestLiveTrip(shareId)
           const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? local
-          const merged = remote ? mergeTrips(latest, remote) : latest
+          const merged = await pullMergePush(shareId, latest)
           if (tripFingerprint(merged) !== tripFingerprint(latest)) {
             setLiveShareHash(shareId)
             setData((prev) => ({
               ...prev,
               trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
             }))
-          }
-          if (shouldPublishLive(latest, remote)) {
-            await pushLiveTrip(shareId, merged)
           }
           setLiveShareHash(shareId)
           liveReadyRef.current = shareId
@@ -216,7 +209,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       shareId,
       (ping) => {
         void tripFromPing(ping, shareId).then((remote) => {
-          if (remote && remote.expenses.length > 0) applyRemote(remote)
+          if (remote) applyRemote(remote)
         })
         window.clearTimeout(assembleTimer)
         assembleTimer = window.setTimeout(() => {
@@ -307,7 +300,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           .map((name) => {
             const color = nextPersonColor(colors)
             colors.push(color)
-            return { id: uid(), name, color }
+            return { id: uid(), name, color, updatedAt: Date.now() }
           })
         if (trip.people[0]) {
           saveMyPersonId(trip.id, trip.people[0].id)
@@ -324,7 +317,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveTrip: (trip) =>
         setData((d) => ({
           ...d,
-          trips: d.trips.map((t) => (t.id === trip.id ? { ...stampTripAuthor(trip), isDemo: false } : t)),
+          trips: d.trips.map((t) =>
+            t.id === trip.id ? applyTripSave(t, { ...stampTripAuthor(trip), isDemo: false }) : t,
+          ),
         })),
       deleteTrip: (id) =>
         setData((d) => {
