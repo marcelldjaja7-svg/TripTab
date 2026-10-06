@@ -12,10 +12,12 @@ import {
 } from './lib/live'
 import {
   adoptSharedTrip,
+  applyTripSave,
   clearLiveShareLocation,
   mintLiveShareId,
   mergeTrips,
   pullLiveTrip,
+  pullMergePush,
   pushLiveTrip,
   setLiveShareHash,
   shouldPublishLive,
@@ -161,23 +163,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
-          // After the first pull, push this phone's edits immediately — bills, people, and deletes.
-          if (!firstForRoom) {
-            await pushLiveTrip(shareId, local)
-            setLiveShareHash(shareId)
-          }
-          const remote = await pullLatestLiveTrip(shareId)
           const latest = dataRef.current.trips.find((t) => t.shareId === shareId) ?? local
-          const merged = remote ? mergeTrips(latest, remote) : latest
+          const merged = await pullMergePush(shareId, latest)
           if (tripFingerprint(merged) !== tripFingerprint(latest)) {
             setLiveShareHash(shareId)
             setData((prev) => ({
               ...prev,
               trips: prev.trips.map((t) => (t.id === latest.id ? { ...merged, id: latest.id, shareId } : t)),
             }))
-          }
-          if (shouldPublishLive(latest, remote)) {
-            await pushLiveTrip(shareId, merged)
           }
           setLiveShareHash(shareId)
           liveReadyRef.current = shareId
@@ -324,7 +317,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveTrip: (trip) =>
         setData((d) => ({
           ...d,
-          trips: d.trips.map((t) => (t.id === trip.id ? { ...stampTripAuthor(trip), isDemo: false } : t)),
+          trips: d.trips.map((t) =>
+            t.id === trip.id ? applyTripSave(t, { ...stampTripAuthor(trip), isDemo: false }) : t,
+          ),
         })),
       deleteTrip: (id) =>
         setData((d) => {

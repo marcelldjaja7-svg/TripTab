@@ -253,7 +253,8 @@ function withLiveMeta(trip: Trip, shareId: string, ping: LivePing): Trip {
     ...trip,
     shareId,
     isDemo: false,
-    updatedAt: logAt || trip.updatedAt,
+    // Keep rate / base / category clocks. A newer bill must not squash a rate-only edit.
+    updatedAt: Math.max(logAt, trip.updatedAt),
     updatedByName: trip.updatedByName || ping.who,
   }
 }

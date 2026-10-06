@@ -203,11 +203,15 @@ export function BillScanPanel({
 export function ScanLines({
   items,
   currency,
+  total,
 }: {
   items: { name: string; amount: number }[]
   currency: string
+  total?: number
 }) {
   if (items.length === 0) return null
+  const lineSum = items.reduce((sum, item) => sum + item.amount, 0)
+  const gap = typeof total === 'number' && Number.isFinite(total) ? lineSum - total : null
   return (
     <div>
       <p className="mb-2 px-1 text-[13px] font-medium text-[var(--muted)]">
@@ -223,8 +227,10 @@ export function ScanLines({
           </GroupRow>
         ))}
       </Group>
-      <p className={cn('mt-2 px-1 text-[13px] text-[var(--muted)]')}>
-        Check these, then edit the total above if needed. Nothing is saved until you tap Add Expense.
+      <p className={cn('mt-2 px-1 text-[13px]', gap && Math.abs(gap) >= 0.005 ? 'text-[var(--danger)]' : 'text-[var(--muted)]')}>
+        {gap != null && Math.abs(gap) >= 0.005
+          ? `Items add to ${formatMoney(lineSum, currency)} · ${gap > 0 ? `${formatMoney(gap, currency)} more than the total` : `${formatMoney(-gap, currency)} less than the total`}. The split still uses the total.`
+          : 'Check these, then edit the total above if needed. The split uses the total, not the item list.'}
       </p>
     </div>
   )

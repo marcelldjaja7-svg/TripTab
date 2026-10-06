@@ -2,8 +2,11 @@ import type { Expense, PersonBalance, Transfer, Trip } from '../types'
 import { currencyDecimals } from './currencies'
 import {
   allocateProportional,
+  expenseRate,
   formatMoney,
   fromMinor,
+  hasAllZeroShares,
+  hasNegativeShares,
   isSettlement,
   participantIdsOf,
   splitWeights,
@@ -28,25 +31,48 @@ type MinorBalance = {
  * Equal = even weights. Custom amounts and percents are weights, so each
  * person is billed in proportion to what they have to pay on that bill.
  */
+function ledgerPeople(trip: Trip): { id: string; name: string; color: string }[] {
+  const seen = new Map(trip.people.map((person) => [person.id, person]))
+  for (const expense of trip.expenses) {
+    for (const id of [expense.paidBy, ...expense.participantIds]) {
+      if (id && !seen.has(id)) seen.set(id, { id, name: 'Removed friend', color: '#94a3b8' })
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
+
+function expenseIsLedgerable(trip: Trip, expense: Expense): boolean {
+  if (!expense.paidBy) return false
+  if (hasNegativeShares(expense)) return false
+  if (hasAllZeroShares(expense)) return false
+  if (expense.participantIds.filter(Boolean).length === 0) return false
+  if (expenseRate(expense, trip) == null) return false
+  const total = toBaseMinor(expense.amount, expense.currency, trip, expense)
+  return Number.isFinite(total)
+}
+
 export function expenseShareMinor(trip: Trip, expense: Expense): Map<string, number> {
   const ids = participantIdsOf(expense)
-  const totalMinor = toBaseMinor(expense.amount, expense.currency, trip)
-  if (ids.length === 0 || totalMinor === 0) return new Map()
+  const totalMinor = toBaseMinor(expense.amount, expense.currency, trip, expense)
+  if (ids.length === 0 || !Number.isFinite(totalMinor) || totalMinor === 0) return new Map()
+  if (!expenseIsLedgerable(trip, expense)) return new Map()
   return allocateProportional(ids, splitWeights(expense, ids), totalMinor)
 }
 
 export function computeMinorBalances(trip: Trip): MinorBalance[] {
+  const people = ledgerPeople(trip)
   const paid = new Map<string, number>()
   const share = new Map<string, number>()
   const settled = new Map<string, number>()
-  for (const person of trip.people) {
+  for (const person of people) {
     paid.set(person.id, 0)
     share.set(person.id, 0)
     settled.set(person.id, 0)
   }
 
   for (const expense of trip.expenses) {
-    const totalMinor = toBaseMinor(expense.amount, expense.currency, trip)
+    if (!expenseIsLedgerable(trip, expense)) continue
+    const totalMinor = toBaseMinor(expense.amount, expense.currency, trip, expense)
     if (isSettlement(trip, expense)) {
       const ids = participantIdsOf(expense)
       const recipients = ids.filter((id) => id !== expense.paidBy)
@@ -64,7 +90,7 @@ export function computeMinorBalances(trip: Trip): MinorBalance[] {
     }
   }
 
-  return trip.people.map((person) => {
+  return people.map((person) => {
     const p = paid.get(person.id) ?? 0
     const s = share.get(person.id) ?? 0
     const x = settled.get(person.id) ?? 0
@@ -123,11 +149,11 @@ export function suggestedTransfers(trip: Trip): Transfer[] {
   const debtors = balances
     .filter((b) => b.net <= -EPS)
     .map((b) => ({ personId: b.personId, remain: -b.net }))
-    .sort((a, b) => b.remain - a.remain)
+    .sort((a, b) => b.remain - a.remain || a.personId.localeCompare(b.personId))
   const creditors = balances
     .filter((b) => b.net >= EPS)
     .map((b) => ({ personId: b.personId, remain: b.net }))
-    .sort((a, b) => b.remain - a.remain)
+    .sort((a, b) => b.remain - a.remain || a.personId.localeCompare(b.personId))
 
   const transfers: Transfer[] = []
 

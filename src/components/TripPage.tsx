@@ -77,13 +77,24 @@ export function TripPage({ trip }: { trip: Trip }) {
 
   const saveExpense = (expense: Expense, rate?: { currency: string; rate: number }) => {
     const rates = rate ? { ...trip.rates, [rate.currency]: rate.rate } : trip.rates
-    const exists = trip.expenses.some((e) => e.id === expense.id)
+    const exists = trip.expenses.find((e) => e.id === expense.id)
+    const fxRate = rate?.rate ?? (expense.currency === trip.baseCurrency ? 1 : trip.rates[expense.currency])
+    const stamped = {
+      ...expense,
+      updatedAt: Date.now(),
+      rev: (exists?.rev ?? 0) + 1,
+      fxRate: typeof fxRate === 'number' && fxRate > 0 ? fxRate : expense.fxRate,
+    }
     saveTrip({
       ...trip,
       rates,
+      rateTouchedAt:
+        rate && rate.rate > 0
+          ? { ...trip.rateTouchedAt, [rate.currency]: Date.now() }
+          : trip.rateTouchedAt,
       expenses: exists
-        ? trip.expenses.map((e) => (e.id === expense.id ? { ...expense, updatedAt: Date.now() } : e))
-        : [{ ...expense, updatedAt: Date.now() }, ...trip.expenses],
+        ? trip.expenses.map((e) => (e.id === expense.id ? stamped : e))
+        : [stamped, ...trip.expenses],
     })
     setFormOpen(false)
     setEditing(null)

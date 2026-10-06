@@ -6,11 +6,11 @@ import {
   parseShareLocation,
   shareLinkForTrip,
 } from './share'
-import { PING_MAX, publishLivePing } from './live'
-import { mergeTrips } from './merge'
+import { PING_MAX, publishLivePing, pullLatestLiveTrip } from './live'
+import { mergeTrips, shouldPublishLive } from './merge'
 import { normalizeTrip } from './storage'
 
-export { mergeTrips, shouldPublishLive, tripFingerprint } from './merge'
+export { applyTripSave, mergeTrips, shouldPublishLive, tripFingerprint } from './merge'
 
 const SNAPSHOT = 'https://bytebin.lucko.me'
 const ROOM = 'https://api.restful-api.dev/objects'
@@ -129,6 +129,19 @@ export async function pullLiveTrip(shareId: string): Promise<Trip | null> {
   } catch {
     return null
   }
+}
+
+/** Pull, union, publish the union, then retry once so an overlapping PUT cannot drop a bill. */
+export async function pullMergePush(shareId: string, local: Trip): Promise<Trip> {
+  let current = local
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const remote = await pullLatestLiveTrip(shareId)
+    const merged = remote ? mergeTrips(current, remote) : current
+    current = merged
+    if (!shouldPublishLive(merged, remote ?? null)) break
+    await pushLiveTrip(shareId, merged)
+  }
+  return current
 }
 
 export async function pushLiveTrip(shareId: string, trip: Trip): Promise<void> {

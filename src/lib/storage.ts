@@ -93,6 +93,16 @@ export function normalizeTrip(input: unknown): Trip | null {
     categories,
     expenses,
     rates,
+    rateTouchedAt:
+      raw.rateTouchedAt && typeof raw.rateTouchedAt === 'object'
+        ? Object.fromEntries(
+            Object.entries(raw.rateTouchedAt as Record<string, unknown>).filter(
+              (entry): entry is [string, number] => typeof entry[1] === 'number',
+            ),
+          )
+        : undefined,
+    baseUpdatedAt: typeof raw.baseUpdatedAt === 'number' ? raw.baseUpdatedAt : undefined,
+    categoriesUpdatedAt: typeof raw.categoriesUpdatedAt === 'number' ? raw.categoriesUpdatedAt : undefined,
     ratesUpdatedAt: typeof raw.ratesUpdatedAt === 'string' ? raw.ratesUpdatedAt : undefined,
     isDemo: Boolean(raw.isDemo),
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
@@ -141,13 +151,11 @@ function normalizeExpense(
   const raw = input as Record<string, unknown>
   const amount = typeof raw.amount === 'number' ? raw.amount : Number(raw.amount)
   if (!Number.isFinite(amount) || amount < 0) return null
-  const peopleIds = new Set(people.map((p) => p.id))
-  const paidBy = typeof raw.paidBy === 'string' && peopleIds.has(raw.paidBy) ? raw.paidBy : people[0]?.id
+  const paidBy = typeof raw.paidBy === 'string' && raw.paidBy ? raw.paidBy : undefined
   if (!paidBy) return null
   const participantIds = Array.isArray(raw.participantIds)
-    ? raw.participantIds.filter((id): id is string => typeof id === 'string' && peopleIds.has(id))
+    ? raw.participantIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
     : people.map((p) => p.id)
-  if (participantIds.length === 0) return null
   const currency =
     typeof raw.currency === 'string' && raw.currency.length === 3
       ? raw.currency.toUpperCase()
@@ -179,6 +187,8 @@ function normalizeExpense(
     date: parseExpenseDate(raw.date) ?? '',
     createdAt: typeof raw.createdAt === 'number' ? raw.createdAt : Date.now(),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : undefined,
+    rev: typeof raw.rev === 'number' ? raw.rev : undefined,
+    fxRate: typeof raw.fxRate === 'number' && raw.fxRate > 0 ? raw.fxRate : undefined,
     ...(lineItems ? { lineItems } : {}),
   }
 }

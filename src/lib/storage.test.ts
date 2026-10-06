@@ -61,4 +61,37 @@ describe('normalizeTrip line items', () => {
     expect(trip?.people[0]?.updatedAt).toBe(40)
     expect(trip?.deletedPersonIds).toEqual(['p2'])
   })
+
+  it('round-trips rate, base, and category clocks and keeps a ghost payer', () => {
+    const trip = normalizeTrip({
+      name: 'Test',
+      baseCurrency: 'IDR',
+      rates: { IDR: 1, USD: 15000 },
+      rateTouchedAt: { USD: 40 },
+      baseUpdatedAt: 50,
+      categoriesUpdatedAt: 60,
+      people: [{ id: 'p1', name: 'Maya', color: '#000' }],
+      expenses: [
+        {
+          id: 'e1',
+          amount: 10,
+          currency: 'USD',
+          paidBy: 'ghost',
+          participantIds: ['p1', 'ghost'],
+          splitMode: 'equal',
+          categoryId: 'food',
+          note: '',
+          date: '2026-10-06',
+          createdAt: 1,
+          fxRate: 16200,
+        },
+      ],
+    })
+    expect(trip?.rateTouchedAt?.USD).toBe(40)
+    expect(trip?.baseUpdatedAt).toBe(50)
+    expect(trip?.categoriesUpdatedAt).toBe(60)
+    expect(trip?.expenses[0]?.paidBy).toBe('ghost')
+    expect(trip?.expenses[0]?.fxRate).toBe(16200)
+    expect(trip?.expenses[0]?.participantIds).toEqual(['p1', 'ghost'])
+  })
 })

@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   equalPercents,
+  equalShareCaption,
   equalShares,
   formatMoney,
   percentToAmounts,
@@ -8,6 +9,7 @@ import {
   roundTo,
   sharesMatchTotal,
   sharesSum,
+  snapAmount,
 } from '../lib/money'
 import { parseExpenseDate } from '../lib/dates'
 import { noteFromScan, type ReceiptScan } from '../lib/receipt'
@@ -60,8 +62,10 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
   const [note, setNote] = useState(expense?.note ?? '')
   const [date, setDate] = useState(parseExpenseDate(expense?.date) || expense?.date || todayISO())
   const [rateDraft, setRateDraft] = useState(() => {
-    const r = trip.rates[expense?.currency ?? trip.baseCurrency]
-    return r ? String(roundTo(r, 8)) : '1'
+    const code = expense?.currency ?? trip.baseCurrency
+    const locked = expense?.fxRate
+    const r = typeof locked === 'number' && locked > 0 ? locked : trip.rates[code]
+    return typeof r === 'number' && r > 0 ? String(roundTo(r, 8)) : ''
   })
   const [error, setError] = useState('')
   const [scanLines, setScanLines] = useState<{ name: string; amount: number }[]>(expense?.lineItems ?? [])
@@ -137,7 +141,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
     if (scan.currency) {
       setCurrency(scan.currency)
       const existing = trip.rates[scan.currency]
-      setRateDraft(existing ? String(roundTo(existing, 8)) : '1')
+      setRateDraft(existing && existing > 0 ? String(roundTo(existing, 8)) : '')
     }
     if (scan.note || scan.merchant || scan.lineItems?.length) {
       setNote(noteFromScan(scan.note || scan.merchant || '', scan.lineItems ?? []))
@@ -162,6 +166,22 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
       setError('Include at least one person on this bill.')
       return
     }
+    if (splitMode === 'custom' && Object.values(parsedAmounts).some((n) => n < 0)) {
+      setError('Shares cannot be negative.')
+      return
+    }
+    if (splitMode === 'percent' && Object.values(parsedPercents).some((n) => n < 0)) {
+      setError('Percents cannot be negative.')
+      return
+    }
+    if (splitMode === 'custom' && participants.every((id) => (parsedAmounts[id] ?? 0) <= 0)) {
+      setError('At least one person needs a share greater than zero.')
+      return
+    }
+    if (splitMode === 'percent' && participants.every((id) => (parsedPercents[id] ?? 0) <= 0)) {
+      setError('At least one person needs a percent greater than zero.')
+      return
+    }
     if (splitMode === 'custom' && !sharesMatchTotal(parsedAmounts, parsedAmount, currency)) {
       setError(`Amounts must add up to ${formatMoney(parsedAmount, currency)}.`)
       return
@@ -171,12 +191,12 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
       return
     }
     if (currency !== trip.baseCurrency && (!Number.isFinite(rate) || rate <= 0)) {
-      setError('Set a conversion rate first.')
+      setError('Set a conversion rate first. A missing rate is not 1:1.')
       return
     }
     const next: Expense = {
       id: expense?.id ?? uid(),
-      amount: parsedAmount,
+      amount: snapAmount(parsedAmount, currency),
       currency,
       paidBy,
       participantIds: participants,
@@ -186,6 +206,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
       note: noteFromScan(note.trim(), scanLines),
       date: parseExpenseDate(date) || date,
       createdAt: expense?.createdAt ?? Date.now(),
+      fxRate: currency === trip.baseCurrency ? 1 : rate,
       lineItems: scanLines.length ? scanLines : undefined,
     }
     onSave(next, currency === trip.baseCurrency ? undefined : { currency, rate })
@@ -218,7 +239,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
                 onChange={(code) => {
                   setCurrency(code)
                   const existing = trip.rates[code]
-                  setRateDraft(existing ? String(roundTo(existing, 8)) : '1')
+                  setRateDraft(existing && existing > 0 ? String(roundTo(existing, 8)) : '')
                 }}
               />
             </GroupRow>
@@ -242,7 +263,9 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
             </GroupRow>
           </Group>
 
-          {scanLines.length > 0 && <ScanLines items={scanLines} currency={currency} />}
+          {scanLines.length > 0 && (
+            <ScanLines items={scanLines} currency={currency} total={Number.isFinite(parsedAmount) ? parsedAmount : undefined} />
+          )}
 
           {currency !== trip.baseCurrency && (
             <Group>
@@ -385,7 +408,7 @@ export function ExpenseForm({ trip, expense, open, preferScan, onClose, onSave, 
             {splitMode === 'equal' && Number.isFinite(parsedAmount) && participants.length > 0 && (
               <p className="mt-2 px-1 text-[13px] text-[var(--muted)]">
                 {participants.length} {participants.length === 1 ? 'person' : 'people'} ·{' '}
-                {formatMoney(equal[participants[0]] ?? 0, currency)} each
+                {equalShareCaption(parsedAmount, participants, currency)}
               </p>
             )}
             {splitMode === 'custom' && Number.isFinite(parsedAmount) && (

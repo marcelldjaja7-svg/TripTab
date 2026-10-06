@@ -162,11 +162,11 @@ export function convertRatesToNewBase(
 ): Record<string, number> {
   const factor = rates[newBase]
   if (!factor || factor <= 0) {
-    return { ...ratesForBase(newBase), ...rates, [newBase]: 1 }
+    return { ...ratesForBase(newBase), [newBase]: 1 }
   }
   const next: Record<string, number> = {}
   for (const [code, value] of Object.entries(rates)) {
-    next[code] = value / factor
+    if (typeof value === 'number' && value > 0) next[code] = value / factor
   }
   next[newBase] = 1
   return roundRates(next)
